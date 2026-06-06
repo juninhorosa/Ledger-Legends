@@ -1,9 +1,14 @@
-from fastapi import FastAPI, APIRouter, HTTPException
+from fastapi import FastAPI, APIRouter, HTTPException, Request
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
+import hmac
+import hashlib
+import json
+from urllib.parse import unquote, parse_qsl
+import httpx
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional, Dict, Any
@@ -15,6 +20,11 @@ load_dotenv(ROOT_DIR / '.env')
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
+
+TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
+TELEGRAM_WEBHOOK_SECRET = os.environ.get('TELEGRAM_WEBHOOK_SECRET', 'secret')
+APP_URL = os.environ.get('APP_URL', '')
+TG_API = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
 app = FastAPI(title="Chronicles of TON API")
 api_router = APIRouter(prefix="/api")
@@ -138,6 +148,140 @@ async def leaderboard():
     cursor = db.players.find({}, {"_id": 0, "wallet": 1, "name": 1, "highest_wave": 1, "battle_meter": 1, "level": 1})
     docs = await cursor.sort("battle_meter", -1).limit(20).to_list(20)
     return docs
+
+
+# ---------- Telegram Mini App Integration ----------
+def verify_telegram_init_data(init_data: str) -> Optional[dict]:
+    """Validate Telegram WebApp initData using HMAC-SHA256.
+    Returns parsed user dict if valid, None otherwise."""
+    if not TELEGRAM_BOT_TOKEN or not init_data:
+        return None
+    try:
+        parsed = dict(parse_qsl(init_data, keep_blank_values=True))
+        received_hash = parsed.pop("hash", None)
+        if not received_hash:
+            return None
+        data_check_string = "\n".join(f"{k}={v}" for k, v in sorted(parsed.items()))
+        secret_key = hmac.new(b"WebAppData", TELEGRAM_BOT_TOKEN.encode(), hashlib.sha256).digest()
+        computed_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(computed_hash, received_hash):
+            return None
+        user_raw = parsed.get("user")
+        if user_raw:
+            parsed["user"] = json.loads(user_raw)
+        return parsed
+    except Exception as e:
+        logging.exception("Telegram initData verification failed: %s", e)
+        return None
+
+
+class TelegramAuthRequest(BaseModel):
+    init_data: str
+
+@api_router.post("/telegram/auth")
+async def telegram_auth(body: TelegramAuthRequest):
+    parsed = verify_telegram_init_data(body.init_data)
+    if not parsed:
+        raise HTTPException(status_code=401, detail="Invalid Telegram initData")
+    user = parsed.get("user", {})
+    tg_id = user.get("id")
+    if not tg_id:
+        raise HTTPException(status_code=400, detail="No user in initData")
+    wallet_key = f"tg:{tg_id}"
+    existing = await db.players.find_one({"wallet": wallet_key}, {"_id": 0})
+    if not existing:
+        first = user.get("first_name") or "Hero"
+        new_player = Player(wallet=wallet_key, name=first[:24])
+        doc = new_player.model_dump()
+        doc["telegram_id"] = tg_id
+        doc["telegram_username"] = user.get("username")
+        await db.players.insert_one(doc)
+        existing = doc
+    return {
+        "wallet": wallet_key,
+        "telegram_id": tg_id,
+        "telegram_username": user.get("username"),
+        "first_name": user.get("first_name"),
+        "player": {k: v for k, v in existing.items() if k != "_id"},
+    }
+
+
+class NotifyRequest(BaseModel):
+    telegram_id: int
+    text: str
+    parse_mode: Optional[str] = "HTML"
+
+@api_router.post("/telegram/notify")
+async def telegram_notify(body: NotifyRequest):
+    if not TELEGRAM_BOT_TOKEN:
+        raise HTTPException(status_code=500, detail="Bot token not configured")
+    async with httpx.AsyncClient(timeout=10.0) as cx:
+        r = await cx.post(f"{TG_API}/sendMessage", json={
+            "chat_id": body.telegram_id,
+            "text": body.text,
+            "parse_mode": body.parse_mode,
+        })
+        return r.json()
+
+
+@api_router.post("/telegram/webhook/{secret}")
+async def telegram_webhook(secret: str, request: Request):
+    if secret != TELEGRAM_WEBHOOK_SECRET:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    update = await request.json()
+    msg = update.get("message") or update.get("edited_message") or {}
+    text = msg.get("text", "")
+    chat = msg.get("chat", {})
+    chat_id = chat.get("id")
+    if not chat_id:
+        return {"ok": True}
+    if text.startswith("/start"):
+        await _tg_send(chat_id,
+            "<b>⚔️ Chronicles of TON</b>\n\nEmbark on an epic incremental RPG adventure! Hunt monsters, collect legendary loot, and master the talent tree.\n\n<i>Tap the button below to enter the realm.</i>",
+            reply_markup={
+                "inline_keyboard": [[{"text": "🛡️ Play Now", "web_app": {"url": APP_URL}}]]
+            },
+        )
+    elif text.startswith("/help"):
+        await _tg_send(chat_id, "Use /start to open the game. Notifications are sent automatically when bosses appear or rewards are ready.")
+    return {"ok": True}
+
+
+async def _tg_send(chat_id: int, text: str, reply_markup: Optional[dict] = None):
+    if not TELEGRAM_BOT_TOKEN:
+        return
+    payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
+    async with httpx.AsyncClient(timeout=10.0) as cx:
+        try:
+            await cx.post(f"{TG_API}/sendMessage", json=payload)
+        except Exception as e:
+            logging.warning("Telegram send failed: %s", e)
+
+
+@api_router.post("/telegram/setup")
+async def telegram_setup():
+    """Idempotent: configures the bot's menu button and webhook. Run once after deploy."""
+    if not TELEGRAM_BOT_TOKEN or not APP_URL:
+        raise HTTPException(status_code=500, detail="Bot token or APP_URL missing")
+    webhook_url = f"{APP_URL}/api/telegram/webhook/{TELEGRAM_WEBHOOK_SECRET}"
+    results = {}
+    async with httpx.AsyncClient(timeout=15.0) as cx:
+        r1 = await cx.post(f"{TG_API}/setWebhook", json={"url": webhook_url, "drop_pending_updates": True})
+        results["setWebhook"] = r1.json()
+        r2 = await cx.post(f"{TG_API}/setChatMenuButton", json={
+            "menu_button": {"type": "web_app", "text": "⚔️ Play", "web_app": {"url": APP_URL}}
+        })
+        results["setChatMenuButton"] = r2.json()
+        r3 = await cx.post(f"{TG_API}/setMyCommands", json={
+            "commands": [
+                {"command": "start", "description": "Open Chronicles of TON"},
+                {"command": "help", "description": "How to play"},
+            ]
+        })
+        results["setMyCommands"] = r3.json()
+    return results
 
 
 app.include_router(api_router)

@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { ITEMS, TALENTS, getMonsterForWave } from "../game/items";
+import { SKILLS } from "../game/skills";
 import { savePlayer } from "../lib/api";
 
 const DEFAULT_STATE = {
@@ -24,6 +25,9 @@ const DEFAULT_STATE = {
   autoAttack: true,
   damageNumbers: [],
   saving: false,
+  heroState: "idle", // idle | attack | hurt | victory | cast
+  activeEffect: null, // { id, effect, ts }
+  skillCooldowns: {}, // { skillId: timestampReady }
 };
 
 function xpToLevel(level) { return 100 + (level - 1) * 80; }
@@ -123,7 +127,8 @@ export const useGame = create((set, get) => ({
     const newHp = Math.max(0, s.monsterHp - dmg);
 
     const dn = { id: Date.now() + Math.random(), value: dmg, crit: isCrit, x: 40 + Math.random() * 20, y: 30 };
-    set({ monsterHp: newHp, damageNumbers: [...s.damageNumbers, dn] });
+    set({ monsterHp: newHp, damageNumbers: [...s.damageNumbers, dn], heroState: "attack" });
+    setTimeout(() => set((st) => ({ heroState: st.heroState === "attack" ? "idle" : st.heroState })), 250);
     setTimeout(() => {
       set((st) => ({ damageNumbers: st.damageNumbers.filter((x) => x.id !== dn.id) }));
     }, 900);
@@ -132,6 +137,47 @@ export const useGame = create((set, get) => ({
       get().onMonsterDefeated();
     }
   },
+
+  castSkill: (skillId) => {
+    const s = get();
+    const sk = SKILLS[skillId];
+    if (!sk) return;
+    const now = Date.now();
+    if ((s.skillCooldowns[skillId] || 0) > now) return;
+    if (!s.monster) return;
+
+    const d = computeDerived(s);
+    let dmg = 0;
+    if (sk.type === "damage") {
+      dmg = Math.floor(d.baseDamage * (sk.multiplier || 1));
+      const isCrit = Math.random() < d.critChance;
+      if (isCrit) dmg = Math.floor(dmg * d.critDmg);
+      const newHp = Math.max(0, s.monsterHp - dmg);
+      const dn = { id: Date.now() + Math.random(), value: dmg, crit: true, x: 45 + Math.random() * 10, y: 30 };
+      set({
+        monsterHp: newHp,
+        damageNumbers: [...s.damageNumbers, dn],
+        heroState: "cast",
+        activeEffect: { id: Date.now(), effect: sk.effect },
+        skillCooldowns: { ...s.skillCooldowns, [skillId]: now + sk.cooldown },
+      });
+      setTimeout(() => set((st) => ({ heroState: st.heroState === "cast" ? "idle" : st.heroState })), 400);
+      setTimeout(() => set((st) => ({ damageNumbers: st.damageNumbers.filter((x) => x.id !== dn.id) })), 900);
+      if (newHp <= 0) get().onMonsterDefeated();
+    } else if (sk.type === "buff") {
+      // Heal/holy light: skip monster + bonus gold
+      const bonus = Math.floor(s.monster.gold * 0.5 * d.goldMult);
+      set({
+        gold: s.gold + bonus,
+        heroState: "victory",
+        activeEffect: { id: Date.now(), effect: sk.effect },
+        skillCooldowns: { ...s.skillCooldowns, [skillId]: now + sk.cooldown },
+      });
+      setTimeout(() => set((st) => ({ heroState: st.heroState === "victory" ? "idle" : st.heroState })), 600);
+    }
+  },
+
+  clearEffect: () => set({ activeEffect: null }),
 
   onMonsterDefeated: () => {
     const s = get();
@@ -186,7 +232,9 @@ export const useGame = create((set, get) => ({
       seasonXp: s.seasonXp + seasonXpGain,
       monster: nextMonster,
       monsterHp: nextMonster.hp,
+      heroState: "victory",
     });
+    setTimeout(() => set((st) => ({ heroState: st.heroState === "victory" ? "idle" : st.heroState })), 700);
   },
 
   equipItem: (invIndex) => {

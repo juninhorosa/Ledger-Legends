@@ -3,17 +3,32 @@ import { useGame } from "../../store/gameStore";
 import { useI18n } from "../../i18n/I18nContext";
 import { MONSTER_SPRITES } from "../../game/items";
 import { Sword, Pause, Play, Skull } from "lucide-react";
+import AnimatedMonster from "./AnimatedMonster";
+import AnimatedHero from "./AnimatedHero";
+import SkillsBar from "./SkillsBar";
+import SkillEffect from "./SkillEffect";
+import { hapticImpact } from "../../lib/telegram";
 
 export default function CombatScreen() {
   const { t, lang } = useI18n();
   const state = useGame();
   const [hitFx, setHitFx] = useState(false);
+  const [dying, setDying] = useState(false);
   const intervalRef = useRef(null);
+  const prevWaveRef = useRef(state.wave);
 
   useEffect(() => {
     if (!state.monster) state.initRun();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Trigger death anim on wave change
+  useEffect(() => {
+    if (prevWaveRef.current !== state.wave) {
+      setDying(true);
+      setTimeout(() => setDying(false), 400);
+      prevWaveRef.current = state.wave;
+    }
+  }, [state.wave]);
 
   // Auto-attack loop
   useEffect(() => {
@@ -32,6 +47,7 @@ export default function CombatScreen() {
 
   const handleAttack = () => {
     state.attack();
+    hapticImpact("light");
     setHitFx(true);
     setTimeout(() => setHitFx(false), 250);
   };
@@ -63,17 +79,34 @@ export default function CombatScreen() {
         </button>
       </div>
 
-      {/* Monster Arena */}
-      <div className="relative flex-1 flex items-center justify-center bg-black/40 border-2 border-slate-700 rounded-md overflow-hidden min-h-[300px]"
+      {/* Arena */}
+      <div className="relative flex-1 flex items-center justify-between bg-black/40 border-2 border-slate-700 rounded-md overflow-hidden min-h-[320px] px-6"
         style={{ backgroundImage: "radial-gradient(ellipse at center, rgba(217,119,6,0.15), transparent 70%)" }}>
-        <div className={`relative ${hitFx ? "monster-hit" : "monster-float"}`}>
-          <img
+
+        {/* Hero on the left */}
+        <div className="z-10">
+          <AnimatedHero state={state.heroState} size={110} />
+        </div>
+
+        {/* Monster on the right */}
+        <div className="z-10">
+          <AnimatedMonster
             src={sprite}
             alt={state.monster.name[lang]}
-            className="w-56 h-56 object-cover rounded-full border-4 border-amber-700 shadow-[0_0_40px_rgba(217,119,6,0.6)]"
-            data-testid="monster-sprite"
+            hitFx={hitFx}
+            dying={dying}
+            isBoss={state.monster.isBoss}
           />
         </div>
+
+        {/* Skill effect overlay (centered) */}
+        {state.activeEffect && (
+          <SkillEffect
+            key={state.activeEffect.id}
+            effect={state.activeEffect.effect}
+            onComplete={() => useGame.getState().clearEffect()}
+          />
+        )}
 
         {/* Floating damage numbers */}
         {state.damageNumbers.map((dn) => (
@@ -97,6 +130,9 @@ export default function CombatScreen() {
           <div className="bar-fill bar-fill-hp" style={{ width: `${hpPct}%` }} />
         </div>
       </div>
+
+      {/* Skills */}
+      <SkillsBar />
 
       <div className="flex justify-between items-center gap-2">
         <div className="text-xs text-slate-400 font-mono-num">

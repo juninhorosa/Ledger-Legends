@@ -1,0 +1,35 @@
+// Active skills with cooldowns. Effects apply via game store.
+export const SKILLS = {
+  power_strike: {
+    id: "power_strike",
+    name: { en: "Power Strike", pt: "Golpe Poderoso" },
+    desc: { en: "Deal 3× damage instantly", pt: "Causa 3× de dano instantâneo" },
+    cooldown: 8000,
+    type: "damage",
+    multiplier: 3.0,
+    icon: "Swords",
+    color: "#EF4444",
+    effect: "slash",
+  },
+  fireball: {
+    id: "fireball",
+    name: { en: "Fireball", pt: "Bola de Fogo" },
+    desc: { en: "Burn the foe for 5× damage", pt: "Queima o inimigo causando 5× de dano" },
+    cooldown: 15000,
+    type: "damage",
+    multiplier: 5.0,
+    icon: "Flame",
+    color: "#F97316",
+    effect: "fire",
+  },
+  heal: {
+    id: "heal",
+    name: { en: "Holy Light", pt: "Luz Sagrada" },
+    desc: { en: "Skip current monster's counter and gain bonus gold", pt: "Pula o contra-ataque e ganha ouro bônus" },
+    cooldown: 20000,
+    type: "buff",
+    icon: "Heart",
+    color: "#10B981",
+    effect: "heal",
+  },
+};

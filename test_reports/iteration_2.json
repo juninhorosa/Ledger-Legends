@@ -1,0 +1,38 @@
+{
+  "summary": "Iteration 2 backend testing for Chronicles of TON Telegram Mini App integration. Created /app/backend/tests/test_telegram_integration.py with 15 tests covering /api/telegram/auth (HMAC validation incl. valid-signed/tampered/invalid/empty/missing), /api/telegram/notify (Bot API forwarding), /api/telegram/webhook/{secret} (secret check, /start, /help, unknown text, empty payload), and /api/telegram/setup (route registration only). Re-ran the 12 iteration-1 tests (test_chronicles_ton_api.py) — all still pass. Total 26 passed, 1 skipped (telegram/setup intentionally skipped to avoid mutating the production webhook URL; set RUN_TELEGRAM_SETUP=1 to execute).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/telegram/notify", "issue": "No input sanitation on text or chat_id beyond Pydantic types; an attacker who can call this endpoint can spam arbitrary Telegram chat_ids via the bot. Consider auth-gating it (e.g., require valid initData / signed JWT) before exposing in production."},
+      {"endpoint": "/api/telegram/auth", "issue": "auth_date is not validated for freshness. Telegram recommends rejecting initData older than ~24h to mitigate replay. Currently any past auth_date with a valid HMAC is accepted indefinitely."},
+      {"endpoint": "/api/telegram/webhook/{secret}", "issue": "Secret is part of the URL path. Telegram supports X-Telegram-Bot-Api-Secret-Token header (set via setWebhook secret_token) which is the recommended approach; current path-based approach leaks the secret into web-server logs. Functionally OK."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_telegram_integration.py",
+    "/app/backend/tests/test_chronicles_ton_api.py",
+    "/app/test_reports/pytest/pytest_results_iter2.xml"
+  ],
+  "action_items": [
+    "Consider auth-gating /api/telegram/notify so arbitrary callers cannot use the bot to spam any chat_id.",
+    "Add auth_date freshness check (<24h) inside verify_telegram_init_data to mitigate replay attacks.",
+    "Optionally migrate webhook secret from URL path to X-Telegram-Bot-Api-Secret-Token header (Telegram recommended)."
+  ],
+  "critical_code_review_comments": [
+    "verify_telegram_init_data correctly implements Telegram's HMAC-SHA256 spec (WebAppData key + sorted data_check_string).",
+    "/api/telegram/webhook handler is wrapped in try/except inside _tg_send so a failed Telegram API call does not 500 the webhook — good.",
+    "_tg_send swallows exceptions silently; consider logging response.status_code/body on non-2xx to aid debugging.",
+    "server.py is now ~300 lines — still within size guidelines, but Telegram code could be split into a telegram_router.py module if it grows further.",
+    "MongoDB _id is correctly excluded from all responses via projections / dict comprehensions."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_telegram_integration.py (new)"
+  ],
+  "success_rate": {"backend": "100% (26/26 executed tests passed, 1 intentionally skipped)", "frontend": "N/A (skipped per request)"},
+  "test_credentials": "TELEGRAM_BOT_TOKEN and TELEGRAM_WEBHOOK_SECRET sourced from /app/backend/.env. Webhook secret 'chronicles-ton-webhook-secret-2026' verified.",
+  "seed_data_creation": "Tests create ephemeral players with wallets prefixed TEST_ (iter-1 tests) and tg:<telegram_id> (telegram auth test). No cleanup, but data is isolated by unique suffixes.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All Telegram backend endpoints are validated. The test_telegram_integration.py file constructs real HMAC-SHA256-signed initData using the bot token from .env, so the positive auth path is fully exercised, not just rejections. The /api/telegram/setup test is skipped by default — set env var RUN_TELEGRAM_SETUP=1 only if you need to actively reconfigure the bot's webhook + menu button + commands (it will overwrite live state)."
+}

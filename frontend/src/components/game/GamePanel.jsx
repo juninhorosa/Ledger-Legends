@@ -2,7 +2,8 @@ import React, { useEffect, useState } from "react";
 import { useTonAddress, useTonWallet } from "@tonconnect/ui-react";
 import { useGame } from "../../store/gameStore";
 import { useI18n } from "../../i18n/I18nContext";
-import { fetchPlayer } from "../../lib/api";
+import { fetchPlayer, api } from "../../lib/api";
+import { initTelegram, isTelegram, getInitData, getTelegramUser } from "../../lib/telegram";
 import CharacterPanel from "./CharacterPanel";
 import CombatScreen from "./CombatScreen";
 import InventoryPanel from "./InventoryPanel";
@@ -28,9 +29,35 @@ export default function GamePanel() {
   const game = useGame();
   const [activeTab, setActiveTab] = useState("inventory");
   const [loaded, setLoaded] = useState(false);
+  const [tgMode, setTgMode] = useState(false);
+  const [tgUser, setTgUser] = useState(null);
 
-  // Load player from backend when wallet connects
+  // Telegram Mini App auto-auth on mount
   useEffect(() => {
+    const tg = initTelegram();
+    if (tg && isTelegram()) {
+      setTgMode(true);
+      const user = getTelegramUser();
+      setTgUser(user);
+      (async () => {
+        try {
+          const r = await api.post("/telegram/auth", { init_data: getInitData() });
+          const data = r.data;
+          game.hydrateFromServer({ ...data.player, wallet: data.wallet });
+          setLoaded(true);
+        } catch (e) {
+          // fallback: still allow play
+          game.setWallet(`tg:guest`);
+          game.initRun();
+          setLoaded(true);
+        }
+      })();
+    }
+  }, []);
+
+  // Load player from backend when TON wallet connects (desktop browser flow)
+  useEffect(() => {
+    if (tgMode) return;
     let cancelled = false;
     const load = async () => {
       if (!address) { setLoaded(false); return; }
@@ -41,7 +68,6 @@ export default function GamePanel() {
           setLoaded(true);
         }
       } catch (e) {
-        // fallback: still allow offline play
         game.setWallet(address);
         game.initRun();
         setLoaded(true);
@@ -49,17 +75,16 @@ export default function GamePanel() {
     };
     load();
     return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [address]);
+  }, [address, tgMode]);
 
   // Auto-save every 15s
   useEffect(() => {
-    if (!address) return;
+    if (!game.wallet) return;
     const id = setInterval(() => { useGame.getState().saveToServer(); }, 15000);
     return () => clearInterval(id);
-  }, [address]);
+  }, [game.wallet]);
 
-  if (!wallet) {
+  if (!tgMode && !wallet) {
     return <Landing />;
   }
 
@@ -87,7 +112,14 @@ export default function GamePanel() {
           >
             <Save size={14} /> {game.saving ? t("autoSaving") : t("saved")}
           </button>
-          <WalletPanel />
+          {tgMode ? (
+            <div className="game-panel px-3 py-2 flex items-center gap-2 text-xs" data-testid="telegram-user-badge">
+              <span className="text-cyan-400 font-mono-num">@{tgUser?.username || tgUser?.first_name || "player"}</span>
+              <WalletPanel />
+            </div>
+          ) : (
+            <WalletPanel />
+          )}
         </div>
       </header>
 
