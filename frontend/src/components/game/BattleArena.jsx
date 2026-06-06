@@ -22,6 +22,7 @@ export default function BattleArena() {
   const heroState = useGame((s) => s.heroState);
   const activeEffect = useGame((s) => s.activeEffect);
   const damageNumbers = useGame((s) => s.damageNumbers);
+  const classId = useGame((s) => s.classId);
 
   const arenaRef = useRef(null);
   const [size, setSize] = useState({ w: 600, h: 400 });
@@ -325,6 +326,7 @@ export default function BattleArena() {
               facing={heroFacing}
               frame={heroMoving ? heroWalkFrame : 0}
               state={heroState}
+              klass={classId || "warrior"}
             />
           </div>
         </motion.div>

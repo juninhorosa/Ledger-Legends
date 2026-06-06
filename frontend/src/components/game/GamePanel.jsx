@@ -13,6 +13,7 @@ import SeasonPass from "./SeasonPass";
 import Shop from "./Shop";
 import EconomyShop from "./EconomyShop";
 import AdminPanel from "./AdminPanel";
+import ClassSelection from "./ClassSelection";
 import WalletPanel from "../wallet/WalletPanel";
 import { adminCheck } from "../../lib/api";
 import { Globe2, Save, Sword, Backpack, Hammer, Star, Sparkles, Calendar, Coins, ShieldCheck } from "lucide-react";
@@ -93,11 +94,16 @@ export default function GamePanel() {
     }
     // Dev / preview mode: ?guest=1 enables play without wallet
     if (params.get("guest") === "1") {
-      Promise.resolve().then(() => {
+      Promise.resolve().then(async () => {
         setTgMode(true);
         setTgUser({ first_name: "Guest", username: "guest" });
         game.setWallet("guest:local");
         game.initRun();
+        // Auto-create the player record so class selection / economy endpoints work
+        try {
+          const data = await fetchPlayer("guest:local");
+          game.hydrateFromServer({ ...data, wallet: "guest:local" });
+        } catch (_) { /* ignore */ }
         setLoaded(true);
       });
     }
@@ -136,8 +142,13 @@ export default function GamePanel() {
     return <Landing />;
   }
 
+  const showClassSelection = loaded && game.wallet && !game.classId;
+
   return (
     <div className="min-h-screen p-4 lg:p-6">
+      {showClassSelection && (
+        <ClassSelection onPicked={(id) => useGame.setState({ classId: id })} />
+      )}
       {/* Header */}
       <header className="flex flex-wrap gap-3 items-center justify-between mb-6">
         <div>

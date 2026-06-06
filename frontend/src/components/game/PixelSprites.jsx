@@ -14,24 +14,51 @@ const PIXEL = { shapeRendering: "crispEdges", imageRendering: "pixelated" };
  *  - facing: 'right' | 'left'  (flip horizontally)
  *  - frame: 0 | 1   (walk-cycle leg swap)
  *  - state: 'idle' | 'walk' | 'attack' | 'cast' | 'victory'
+ *  - klass: 'warrior' | 'paladin' | 'mage'  (WoW-themed palette + weapon)
  */
-export function PixelHero({ size = 64, facing = "right", frame = 0, state = "idle" }) {
+const CLASS_PALETTE = {
+  warrior: {
+    tunic: "#a8341f",       // dark-red plate
+    tunicShade: "#6e1e10",
+    pants: "#3a2410",
+    boots: "#1a0e08",
+    shield: "#5a3a1f",
+    shieldRim: "#2c1a0c",
+    accent: "#f0b144",      // golden trim
+    weapon: "axe",
+  },
+  paladin: {
+    tunic: "#dccd8f",       // gold-silver holy plate
+    tunicShade: "#a8954e",
+    pants: "#3a4250",
+    boots: "#1d2533",
+    shield: "#f5d142",      // gold shield with red cross drawn later
+    shieldRim: "#a67c0c",
+    accent: "#ffffff",
+    weapon: "hammer",
+  },
+  mage: {
+    tunic: "#5a39b6",       // arcane purple robe
+    tunicShade: "#3a1f7a",
+    pants: "#2c1a52",
+    boots: "#1a0e30",
+    shield: null,            // no shield, just staff
+    shieldRim: null,
+    accent: "#5ad1e8",
+    weapon: "staff",
+  },
+};
+
+export function PixelHero({ size = 64, facing = "right", frame = 0, state = "idle", klass = "warrior" }) {
   const attack = state === "attack";
   const cast = state === "cast";
+  const pal = CLASS_PALETTE[klass] || CLASS_PALETTE.warrior;
 
-  // Palette
+  // Common palette
   const skin = "#f3c19a";
   const skinShade = "#c89167";
-  const hair = "#3a2410";
-  const tunic = "#2b6cb0";        // blue tunic (like sample image)
-  const tunicShade = "#1f4f88";
+  const hair = klass === "mage" ? "#2a1f4a" : "#3a2410";
   const belt = "#5a3a1f";
-  const pants = "#1d2f4d";
-  const boots = "#3a2410";
-  const swordBlade = "#cfe6f7";
-  const swordHilt = "#b89642";
-  const shield = "#a73f3f";
-  const shieldRim = "#5a1f1f";
   const outline = "#1a0e08";
 
   return (
@@ -44,11 +71,36 @@ export function PixelHero({ size = 64, facing = "right", frame = 0, state = "idl
       {/* Drop shadow under feet */}
       <ellipse cx="8" cy="15.4" rx="3.4" ry="0.6" fill="rgba(0,0,0,0.45)" />
 
+      {/* Mage hood / Warrior horns / Paladin halo */}
+      {klass === "mage" && (
+        <>
+          <rect x="5" y="0" width="6" height="2" fill={pal.tunic} />
+          <rect x="4" y="1" width="8" height="1" fill={pal.tunicShade} />
+          <rect x="6" y="2" width="4" height="1" fill={pal.tunic} />
+        </>
+      )}
+      {klass === "warrior" && (
+        <>
+          {/* Helmet horns */}
+          <rect x="4" y="1" width="1" height="1" fill={pal.shieldRim} />
+          <rect x="11" y="1" width="1" height="1" fill={pal.shieldRim} />
+          <rect x="5" y="1" width="6" height="1" fill={pal.tunicShade} />
+        </>
+      )}
+      {klass === "paladin" && (
+        <>
+          {/* Holy halo */}
+          <rect x="5" y="0" width="6" height="1" fill={pal.accent} opacity="0.9" />
+          <rect x="4" y="0" width="1" height="1" fill={pal.accent} opacity="0.5" />
+          <rect x="11" y="0" width="1" height="1" fill={pal.accent} opacity="0.5" />
+        </>
+      )}
+
       {/* Head */}
       <rect x="6" y="1" width="4" height="3" fill={skin} />
-      <rect x="6" y="1" width="4" height="1" fill={hair} />
-      <rect x="5" y="2" width="1" height="2" fill={hair} />
-      <rect x="10" y="2" width="1" height="1" fill={hair} />
+      {klass !== "mage" && <rect x="6" y="1" width="4" height="1" fill={hair} />}
+      {klass !== "mage" && <rect x="5" y="2" width="1" height="2" fill={hair} />}
+      {klass !== "mage" && <rect x="10" y="2" width="1" height="1" fill={hair} />}
       {/* Eyes */}
       <rect x="7" y="2" width="1" height="1" fill={outline} />
       <rect x="9" y="2" width="1" height="1" fill={outline} />
@@ -58,71 +110,134 @@ export function PixelHero({ size = 64, facing = "right", frame = 0, state = "idl
       {/* Neck */}
       <rect x="7" y="4" width="2" height="1" fill={skinShade} />
 
-      {/* Torso (tunic) */}
-      <rect x="5" y="5" width="6" height="3" fill={tunic} />
-      <rect x="5" y="7" width="6" height="1" fill={tunicShade} />
+      {/* Torso (tunic / armor / robe) */}
+      <rect x="5" y="5" width="6" height="3" fill={pal.tunic} />
+      <rect x="5" y="7" width="6" height="1" fill={pal.tunicShade} />
+      {/* Class emblem on chest */}
+      {klass === "paladin" && (
+        <>
+          <rect x="7" y="6" width="2" height="1" fill="#c0392b" />
+          <rect x="7" y="5" width="2" height="2" fill="#c0392b" opacity="0.4" />
+        </>
+      )}
+      {klass === "mage" && (
+        <rect x="7" y="6" width="2" height="1" fill={pal.accent} />
+      )}
       {/* Belt */}
       <rect x="5" y="8" width="6" height="1" fill={belt} />
 
-      {/* Shield (left arm — appears on right when facing right because mirrored) */}
-      <rect x="3" y="5" width="2" height="3" fill={shield} />
-      <rect x="3" y="5" width="2" height="1" fill={shieldRim} />
-      <rect x="3" y="7" width="2" height="1" fill={shieldRim} />
-      <rect x="3" y="6" width="1" height="1" fill="#e07a7a" />
+      {/* Shield (left arm — visible on right when facing right because of mirror) */}
+      {pal.shield && (
+        <>
+          <rect x="3" y="5" width="2" height="3" fill={pal.shield} />
+          <rect x="3" y="5" width="2" height="1" fill={pal.shieldRim} />
+          <rect x="3" y="7" width="2" height="1" fill={pal.shieldRim} />
+          {klass === "paladin" && (
+            <>
+              {/* gold cross */}
+              <rect x="3" y="6" width="2" height="1" fill="#c0392b" />
+              <rect x="3" y="5" width="2" height="3" fill="none" />
+            </>
+          )}
+          {klass === "warrior" && (
+            <rect x="3" y="6" width="1" height="1" fill="#e07a7a" />
+          )}
+        </>
+      )}
 
-      {/* Sword arm + sword */}
+      {/* Sword / Weapon arm */}
       {attack ? (
         // Swing forward
         <>
-          <rect x="11" y="5" width="1" height="2" fill={skin} />
-          <rect x="12" y="4" width="1" height="4" fill={swordHilt} />
-          <rect x="13" y="2" width="1" height="5" fill={swordBlade} />
-          <rect x="13" y="2" width="1" height="1" fill="#fff" />
+          {klass === "mage" ? (
+            // Staff projecting magic
+            <>
+              <rect x="11" y="3" width="1" height="7" fill="#5a3a1f" />
+              <rect x="10" y="2" width="3" height="2" fill={pal.accent} />
+              <rect x="11" y="1" width="1" height="1" fill="#fff" />
+            </>
+          ) : klass === "paladin" ? (
+            // Hammer
+            <>
+              <rect x="11" y="5" width="1" height="2" fill={skin} />
+              <rect x="12" y="3" width="1" height="6" fill="#5a3a1f" />
+              <rect x="11" y="2" width="3" height="2" fill={pal.shield} />
+              <rect x="11" y="2" width="3" height="1" fill={pal.shieldRim} />
+            </>
+          ) : (
+            // Warrior axe
+            <>
+              <rect x="11" y="5" width="1" height="2" fill={skin} />
+              <rect x="12" y="4" width="1" height="5" fill={pal.accent} />
+              <rect x="13" y="2" width="1" height="3" fill={pal.shieldRim} />
+              <rect x="14" y="3" width="1" height="2" fill={pal.shieldRim} />
+            </>
+          )}
         </>
       ) : cast ? (
         // Raised arm casting
         <>
           <rect x="11" y="3" width="1" height="3" fill={skin} />
-          <rect x="11" y="2" width="1" height="1" fill="#5ad1e8" opacity="0.9" />
-          <rect x="10" y="1" width="3" height="1" fill="#5ad1e8" opacity="0.7" />
+          <rect x="11" y="2" width="1" height="1" fill={pal.accent} opacity="0.9" />
+          <rect x="10" y="1" width="3" height="1" fill={pal.accent} opacity="0.7" />
         </>
       ) : (
-        // Resting sword
+        // Resting weapon by side
         <>
-          <rect x="11" y="5" width="1" height="3" fill={skin} />
-          <rect x="11" y="8" width="1" height="1" fill={swordHilt} />
-          <rect x="11" y="4" width="1" height="4" fill={swordBlade} />
-          <rect x="11" y="3" width="1" height="1" fill={swordHilt} />
+          {klass === "mage" ? (
+            <>
+              {/* Staff */}
+              <rect x="11" y="3" width="1" height="9" fill="#5a3a1f" />
+              <rect x="10" y="2" width="3" height="2" fill={pal.accent} />
+              <rect x="11" y="3" width="1" height="1" fill="#fff" />
+            </>
+          ) : klass === "paladin" ? (
+            <>
+              {/* Hammer down */}
+              <rect x="11" y="5" width="1" height="3" fill={skin} />
+              <rect x="11" y="8" width="1" height="3" fill="#5a3a1f" />
+              <rect x="10" y="3" width="3" height="2" fill={pal.shield} />
+              <rect x="10" y="3" width="3" height="1" fill={pal.shieldRim} />
+            </>
+          ) : (
+            <>
+              {/* Warrior axe down */}
+              <rect x="11" y="5" width="1" height="3" fill={skin} />
+              <rect x="11" y="8" width="1" height="3" fill="#5a3a1f" />
+              <rect x="10" y="3" width="2" height="3" fill={pal.shieldRim} />
+              <rect x="12" y="4" width="1" height="2" fill={pal.accent} />
+            </>
+          )}
         </>
       )}
 
-      {/* Pants */}
-      <rect x="5" y="9" width="6" height="3" fill={pants} />
+      {/* Pants / robe-bottom */}
+      <rect x="5" y="9" width="6" height="3" fill={pal.pants} />
 
       {/* Legs / boots — alternate per frame */}
       {frame === 0 ? (
         <>
-          <rect x="5" y="12" width="2" height="2" fill={pants} />
-          <rect x="5" y="14" width="2" height="1" fill={boots} />
-          <rect x="9" y="12" width="2" height="2" fill={pants} />
-          <rect x="9" y="14" width="2" height="1" fill={boots} />
+          <rect x="5" y="12" width="2" height="2" fill={pal.pants} />
+          <rect x="5" y="14" width="2" height="1" fill={pal.boots} />
+          <rect x="9" y="12" width="2" height="2" fill={pal.pants} />
+          <rect x="9" y="14" width="2" height="1" fill={pal.boots} />
         </>
       ) : (
         <>
-          <rect x="5" y="12" width="2" height="1" fill={pants} />
-          <rect x="5" y="13" width="2" height="2" fill={pants} />
-          <rect x="5" y="14" width="2" height="1" fill={boots} />
-          <rect x="9" y="13" width="2" height="2" fill={pants} />
-          <rect x="9" y="14" width="2" height="1" fill={boots} />
+          <rect x="5" y="12" width="2" height="1" fill={pal.pants} />
+          <rect x="5" y="13" width="2" height="2" fill={pal.pants} />
+          <rect x="5" y="14" width="2" height="1" fill={pal.boots} />
+          <rect x="9" y="13" width="2" height="2" fill={pal.pants} />
+          <rect x="9" y="14" width="2" height="1" fill={pal.boots} />
         </>
       )}
 
       {/* Cast aura */}
       {cast && (
         <>
-          <rect x="2" y="0" width="1" height="1" fill="#5ad1e8" opacity="0.7" />
-          <rect x="13" y="0" width="1" height="1" fill="#5ad1e8" opacity="0.7" />
-          <rect x="0" y="3" width="1" height="1" fill="#5ad1e8" opacity="0.7" />
+          <rect x="2" y="0" width="1" height="1" fill={pal.accent} opacity="0.7" />
+          <rect x="13" y="0" width="1" height="1" fill={pal.accent} opacity="0.7" />
+          <rect x="0" y="3" width="1" height="1" fill={pal.accent} opacity="0.7" />
         </>
       )}
     </svg>

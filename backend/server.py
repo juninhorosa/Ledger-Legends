@@ -85,6 +85,7 @@ class Player(BaseModel):
     vip_purchased_levels: List[int] = Field(default_factory=list)
     xp_pack_expires_at: Optional[str] = None
     start_pack_purchased: bool = False
+    class_id: Optional[str] = None  # "warrior" | "paladin" | "mage"
     telegram_id: Optional[int] = None
     telegram_username: Optional[str] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
@@ -166,6 +167,76 @@ async def purchase_item(wallet: str, body: PurchaseRequest):
         upsert=True
     )
     return {"status": "confirmed", "item_id": body.item_id}
+
+
+# ---------- Classes (Warrior / Paladin / Mage) ----------
+CLASSES: Dict[str, Dict[str, Any]] = {
+    "warrior": {
+        "id": "warrior",
+        "name": {"en": "Warrior", "pt": "Guerreiro"},
+        "tagline": {
+            "en": "Plate-clad brawler with heavy weapons and raw might.",
+            "pt": "Brutamontes de placas com armas pesadas e força bruta.",
+        },
+        "base_stats": {"strength": 14, "agility": 10, "intellect": 6, "stamina": 14},
+        "bonuses": {"damage_pct": 20, "hp_pct": 15, "gold_pct": 5, "crit_pct": 0, "cooldown_pct": 0},
+        "color": "#c0392b",
+    },
+    "paladin": {
+        "id": "paladin",
+        "name": {"en": "Paladin", "pt": "Paladino"},
+        "tagline": {
+            "en": "Holy crusader balancing offense, defense and divine light.",
+            "pt": "Cruzado sagrado balanceando ataque, defesa e luz divina.",
+        },
+        "base_stats": {"strength": 12, "agility": 8, "intellect": 10, "stamina": 14},
+        "bonuses": {"damage_pct": 10, "hp_pct": 10, "gold_pct": 5, "crit_pct": 0, "cooldown_pct": 10, "defense_pct": 25},
+        "color": "#f5d142",
+    },
+    "mage": {
+        "id": "mage",
+        "name": {"en": "Mage", "pt": "Mago"},
+        "tagline": {
+            "en": "Arcane spellcaster bending fire and frost to their will.",
+            "pt": "Conjurador arcano que dobra fogo e gelo à sua vontade.",
+        },
+        "base_stats": {"strength": 6, "agility": 10, "intellect": 18, "stamina": 8},
+        "bonuses": {"damage_pct": 30, "hp_pct": 0, "gold_pct": 0, "crit_pct": 10, "cooldown_pct": 30},
+        "color": "#5ad1e8",
+    },
+}
+
+
+class ClassPickRequest(BaseModel):
+    class_id: str
+
+
+@api_router.get("/classes")
+async def list_classes():
+    return {"items": list(CLASSES.values())}
+
+
+@api_router.post("/player/{wallet}/class")
+async def set_player_class(wallet: str, body: ClassPickRequest):
+    cls = CLASSES.get(body.class_id)
+    if not cls:
+        raise HTTPException(status_code=400, detail="Unknown class")
+    player = await db.players.find_one({"wallet": wallet}, {"_id": 0})
+    if not player:
+        raise HTTPException(status_code=404, detail="Player not found")
+    if player.get("class_id"):
+        raise HTTPException(status_code=400, detail="Class already chosen")
+    # Apply base stats once on first pick
+    base = cls["base_stats"]
+    await db.players.update_one(
+        {"wallet": wallet, "class_id": None},
+        {"$set": {
+            "class_id": cls["id"],
+            "stats": base,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }},
+    )
+    return {"status": "ok", "class_id": cls["id"], "stats": base, "bonuses": cls["bonuses"]}
 
 
 # ---------- Market: sell inventory item with VIP-based tax ----------
@@ -578,7 +649,7 @@ async def deposits_history(wallet: str, limit: int = 20):
 async def get_balance(wallet: str):
     p = await db.players.find_one(
         {"wallet": wallet},
-        {"_id": 0, "ton_balance": 1, "vip_level": 1, "xp_pack_expires_at": 1, "gold": 1, "start_pack_purchased": 1},
+        {"_id": 0, "ton_balance": 1, "vip_level": 1, "xp_pack_expires_at": 1, "gold": 1, "start_pack_purchased": 1, "class_id": 1},
     )
     if not p:
         return {
@@ -588,6 +659,8 @@ async def get_balance(wallet: str):
             "xp_pack_active": False,
             "xp_pack_expires_at": None,
             "start_pack_purchased": False,
+            "class_id": None,
+            "class_bonuses": None,
             "vip_benefits": vip_benefits(0),
         }
     xp_exp = p.get("xp_pack_expires_at")
@@ -598,6 +671,7 @@ async def get_balance(wallet: str):
         except Exception:
             active = False
     level = int(p.get("vip_level") or 0)
+    cls_id = p.get("class_id")
     return {
         "ton_balance": float(p.get("ton_balance", 0.0)),
         "vip_level": level,
@@ -605,6 +679,8 @@ async def get_balance(wallet: str):
         "xp_pack_active": active,
         "xp_pack_expires_at": xp_exp,
         "start_pack_purchased": bool(p.get("start_pack_purchased")),
+        "class_id": cls_id,
+        "class_bonuses": (CLASSES.get(cls_id) or {}).get("bonuses") if cls_id else None,
         "vip_benefits": vip_benefits(level),
     }
 

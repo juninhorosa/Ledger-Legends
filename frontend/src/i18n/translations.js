@@ -157,6 +157,12 @@ export const translations = {
     noWithdrawals: "No withdrawals",
     enterTxHash: "Enter the on-chain tx hash (or leave blank):",
     rejectReason: "Reason for rejection (optional):",
+    // Classes
+    chooseClassTitle: "Choose your class",
+    chooseClassSubtitle: "Pick your path. Each class brings unique bonuses to your hero.",
+    chooseThis: "Choose",
+    chooseClassWarn: "Class selection is permanent for now.",
+    classChosen: "Class chosen!",
   },
   pt: {
     title: "Crônicas de TON",
@@ -316,5 +322,11 @@ export const translations = {
     noWithdrawals: "Sem saques",
     enterTxHash: "Cole o hash da transação on-chain (ou deixe em branco):",
     rejectReason: "Motivo da rejeição (opcional):",
+    // Classes
+    chooseClassTitle: "Escolha sua classe",
+    chooseClassSubtitle: "Escolha o caminho. Cada classe traz bônus únicos pro seu herói.",
+    chooseThis: "Escolher",
+    chooseClassWarn: "A escolha da classe é permanente por enquanto.",
+    classChosen: "Classe escolhida!",
   },
 };
