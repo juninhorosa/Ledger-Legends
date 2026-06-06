@@ -1,71 +1,68 @@
-# Chronicles of TON — PRD
+# Chronicles of TON — Product Requirements
 
-## Problem Statement
-Build a browser-based incremental RPG with TON blockchain economy. World of Warcraft-inspired visuals: chunky, vibrant, epic armors, glowing rune weapons, fantasy enemies (orcs, undead, elves).
+## Original Problem Statement
+TON-based economy for the Chronicles of TON RPG (FastAPI + React + MongoDB).
 
-## Tech Stack
-- Frontend: React (CRA), Tailwind, shadcn/ui primitives, Zustand state, Sonner toasts, lucide-react icons
-- Backend: FastAPI + MongoDB
-- Blockchain: @tonconnect/ui-react SDK (real TON wallet integration)
+**Configuration (production):**
+- Network: TON Mainnet
+- Treasury wallet: `UQCO5ujJsobYdfFjQQ9DGFZThUFXty21_14HkDnPHOMgM79P`
+- Telegram bot token: stored in `/app/backend/.env`
+- Admin Telegram ID (withdrawals + admin panel): `6170049742`
+- User-facing language: Portuguese (pt-BR) + English (en)
 
-## User Choices
-- **TonConnect**: Real SDK integration (Tonkeeper / MyTonWallet)
-- **Persistence**: MongoDB via FastAPI
-- **Scope**: Full MVP — Combat, Inventory, Crafting, Talent Tree, Season Pass, Wallet, Shop
-- **Visuals**: WoW-style imagery (Unsplash fantasy assets)
-- **Language**: Bilingual (EN + PT, toggleable)
+**Rules:**
+- Deposits: open for any amount; credited automatically via on-chain poller.
+- Withdrawals: every withdrawal must be manually approved by Admin (Phase 4).
+- Packs:
+  - Starter Pack — 5 TON, one-time, gives +5,000 gold + 1 rare item (`rune_blade`) + 24h XP boost.
+  - XP Pack — 1.5 TON, 2× XP for 7 days. Re-buying extends the timer.
+- VIP — 30 levels, must be bought sequentially. Cumulative benefits: +XP, +Gold drop, +Damage, +Inventory slots, lower market tax (20% → 10% → 8% @ Lv20 → 5% @ Lv30), badge tier (bronze/silver/gold).
+- Market taxes: 20% if no VIP, 10% if VIP ≥ 1 (Phase 3 — not yet wired into market endpoints).
 
 ## Architecture
-- Backend routes (prefixed `/api`):
-  - `GET /player/{wallet}` — get or create player
-  - `POST /player/{wallet}/save` — save game state
-  - `POST /player/{wallet}/purchase` — record TON/USDT purchase
-  - `GET /leaderboard` — top players by Battle Meter
-- Frontend modules:
-  - `/store/gameStore.js` — Zustand store with derived stats (DPS, BM, max HP, defense)
-  - `/i18n/` — EN/PT translation context
-  - `/components/game/` — CharacterPanel, CombatScreen, InventoryPanel, TalentTree, Crafting, SeasonPass, Shop, GamePanel
-  - `/components/wallet/WalletPanel.jsx` — TonConnect UI + balance fetcher
-- TonConnect manifest at `public/tonconnect-manifest.json`
+- Backend: FastAPI + Motor (MongoDB). Background `_ton_poller_loop` polls TonCenter `getTransactions` every 30s, matches `dep_XXXX` comments, credits `ton_balance`, expires pending deposits older than 1h.
+- Frontend: React 19 + Tailwind + TonConnect UI + zustand store. Webpack polyfills `Buffer` for `@ton/core`.
+- Mongo DB: `chronicles_of_ton` — collections: `players`, `deposits`, `pack_purchases`, `vip_purchases`, `purchases`.
 
-## Core Gameplay Loop
-- Auto-attack DPS combat with wave progression (every 10th wave = boss)
-- Monster scaling per wave; gold/XP/material/loot drops
-- Loot rarity tiers (common → legendary) with color-coded slots
-- Level-up grants talent points; talent tree has 3 branches (Strength / Agility / Intellect)
-- Crafting consumes materials + gold to forge weapons/armor
-- Season pass with 20 tiers (gold & legendary item rewards)
-- Shop with TON / USDT / Gold payment options; TON purchases use `tonConnectUI.sendTransaction`
+## What's Implemented (as of Jun 6, 2026)
+### Phase 1 — Deposits ✅
+- POST `/api/deposit/init` — generates unique `dep_XXXX` comment, returns BoC payload params. Expiry aligned to 3600s.
+- GET `/api/deposit/status/{id}` — returns deposit doc (pending/confirmed/expired).
+- GET `/api/deposits/{wallet}` — paginated history.
+- GET `/api/balance/{wallet}` — `ton_balance`, `vip_level`, `gold`, `xp_pack_active`, `start_pack_purchased`, `vip_benefits`.
+- Background poller credits `ton_balance` once on-chain tx with matching `comment` is detected (≥ amount – 1k nano tolerance).
+- Frontend: `WalletPanel` shows in-game balance + Deposit button; `DepositDialog` builds BoC payload via `@ton/core`, polls status every 10s.
 
-## Implemented (June 2026)
-- ✅ Full backend (5 endpoints) with auto-create player & save
-- ✅ Zustand store with all game systems (combat, inventory, crafting, talents, season, shop)
-- ✅ WoW-themed UI with Cinzel + Outfit + JetBrains Mono fonts
-- ✅ TonConnect integration (real wallet, real `sendTransaction`)
-- ✅ Bilingual (EN/PT) toggle with persistence
-- ✅ Auto-save every 15s + manual save button
-- ✅ Damage numbers, crit, boss waves, monster sprites
-- ✅ Equipment slots with rarity glow
-- ✅ Talent tree with 9 nodes & prerequisites
-- ✅ Season pass with 20 tiers
+### Phase 2 — Packs & VIP ✅
+- GET `/api/pack/catalog`, POST `/api/pack/buy` (start/xp).
+- GET `/api/vip/catalog`, POST `/api/vip/buy` (cumulative).
+- **Atomic conditional updates** prevent race-double-debit.
+- Audit logs to `pack_purchases` and `vip_purchases`.
+- Frontend: `EconomyShop.jsx` (Packs + VIP tabs) integrated into `GamePanel` as a new tab.
 
-## Iteration 3 (Battle Arena + Security)
-- ✅ **Battle Arena interativa**: Hero movimenta com cursor do mouse OU teclas WASD/setas; monstro com IA simples que persegue o herói; ataque automático quando em range
-- ✅ Indicador visual de range (círculo brilhante ao redor do herói)
-- ✅ Sprites de monstros em emoji (🐺 🧌 💀 👹 🐲 etc.) — mais legíveis no formato compacto
-- ✅ Modo `?guest=1` para preview/demo sem carteira
-- ✅ **Segurança P1**: validação de `auth_date` (<24h) no initData (proteção contra replay)
-- ✅ **Segurança P1**: `/api/telegram/notify` agora exige initData válido — chat_id derivado do usuário verificado (não pode mais spammar chats arbitrários)
-- ✅ 34/34 testes backend passando (12 + 12 + 10 novos)
+### Tests
+- `/app/backend/tests/test_ton_economy_phase12.py` — 20 tests, all passing (iteration_4.json).
 
-## Backlog / Next Tasks
-- P1: Server-side payment verification (TON Center polling treasury wallet)
-- P1: USDT Jetton transfer implementation
-- P1: Sistema de referral via `/start ref_<userId>`
-- P2: Múltiplos monstros simultâneos na arena (estilo Vampire Survivors)
-- P2: Animações de skill em sprite sheets pixel-art (estilo Pixlands)
-- P2: Leaderboard UI
-- P2: PvP arena & guilds
-- P2: Sound effects & background music
-- P2: Substituir Lottie VFX inline por animações premium do LottieFiles
-- P2: Migrate webhook secret to X-Telegram-Bot-Api-Secret-Token header
+## Backlog
+### P0 — Next
+- **Phase 3 — Market Taxes**: apply 10%/20% tax in market sell endpoint (needs review of existing market routes).
+- **Phase 4 — Withdrawals**: `POST /api/withdraw/request`, admin approve/reject endpoints (Telegram ID gate).
+- **Phase 4.1 — Hidden Admin Panel**: React route revealed only for Telegram ID 6170049742 to list & action pending withdrawals.
+
+### P1
+- Refactor `start_pack_purchased` to per-pack `purchased_packs: List[str]` to support future one-time packs.
+- Add Mongo indexes: `pack_purchases (wallet, created_at)`, `vip_purchases (wallet, created_at)`, `deposits (wallet, created_at)`, `deposits (comment)`.
+- Require Telegram `initData` (or session token) on pack/vip/withdraw endpoints for spoofing protection.
+- VIP row layout polish (cramped on ≤1280px).
+
+### P2
+- Localized number formatting (pt-BR uses `.` for thousands, `,` for decimals).
+- Pack/VIP purchase notifications via Telegram already wired but best-effort; harden retry.
+- Surface XP pack/VIP buffs in combat formulas (current store ignores `xp_pack_active` & `vip_benefits.xp_gain_bonus_pct`).
+
+## Files of Reference
+- `/app/backend/server.py` — all endpoints + poller.
+- `/app/frontend/src/components/game/EconomyShop.jsx` — Phase 2 UI.
+- `/app/frontend/src/components/wallet/DepositDialog.jsx` — Phase 1 UI.
+- `/app/frontend/src/lib/api.js`, `ton.js`.
+- `/app/memory/test_credentials.md` — testing notes.

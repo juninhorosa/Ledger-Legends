@@ -492,7 +492,7 @@ async def deposit_init(body: DepositInit):
         "amount_ton": body.amount_ton,
         "amount_nano": amount_nano,
         "comment": comment,
-        "expires_in_sec": 1800,
+        "expires_in_sec": 3600,
         "network": TON_NETWORK,
     }
 
@@ -660,7 +660,13 @@ async def pack_buy(body: PackBuyRequest):
     update_doc: Dict[str, Any] = {"$inc": inc_fields, "$set": set_fields}
     if push_fields:
         update_doc["$push"] = push_fields
-    await db.players.update_one({"wallet": body.wallet}, update_doc)
+    # Atomic conditional update: only debit if balance is still sufficient (race-safe)
+    res = await db.players.update_one(
+        {"wallet": body.wallet, "ton_balance": {"$gte": price - 1e-9}},
+        update_doc,
+    )
+    if res.modified_count == 0:
+        raise HTTPException(status_code=409, detail="Concurrent update; please retry")
 
     # Audit log
     await db.pack_purchases.insert_one({
@@ -724,8 +730,13 @@ async def vip_buy(body: VipBuyRequest):
     purchased = list(player.get("vip_purchased_levels") or [])
     purchased.extend(levels_to_buy)
 
-    await db.players.update_one(
-        {"wallet": body.wallet},
+    # Atomic conditional update: only debit if balance is still sufficient and vip_level unchanged
+    res = await db.players.update_one(
+        {
+            "wallet": body.wallet,
+            "ton_balance": {"$gte": total_price - 1e-9},
+            "vip_level": current,
+        },
         {
             "$inc": {"ton_balance": -total_price},
             "$set": {
@@ -735,6 +746,8 @@ async def vip_buy(body: VipBuyRequest):
             },
         },
     )
+    if res.modified_count == 0:
+        raise HTTPException(status_code=409, detail="Concurrent update; please retry")
 
     # Audit log
     await db.vip_purchases.insert_one({
