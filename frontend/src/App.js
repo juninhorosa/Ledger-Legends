@@ -6,7 +6,7 @@ import { I18nProvider } from "@/i18n/I18nContext";
 import GamePanel from "@/components/game/GamePanel";
 import "@/App.css";
 
-const MANIFEST_URL = `${process.env.REACT_APP_BACKEND_URL}/tonconnect-manifest.json`;
+const MANIFEST_URL = `${window.location.origin}/tonconnect-manifest.json`;
 
 function App() {
   return (
