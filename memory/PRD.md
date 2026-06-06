@@ -49,10 +49,26 @@ Build a browser-based incremental RPG with TON blockchain economy. World of Warc
 - ✅ Talent tree with 9 nodes & prerequisites
 - ✅ Season pass with 20 tiers
 
+## Iteration 2 (Telegram + Animations)
+- ✅ Telegram Bot integration (token configured in .env)
+- ✅ Webhook + Mini App menu button + `/start` `/help` commands set
+- ✅ `/api/telegram/auth` validates HMAC-SHA256 initData → auto-creates/loads player
+- ✅ `/api/telegram/notify` proxies to Bot API sendMessage
+- ✅ Frontend auto-detects Telegram WebApp env, auto-logs user (no wallet required in TG)
+- ✅ Framer Motion animated hero (idle/attack/cast/victory states)
+- ✅ Framer Motion animated monster (idle float, hit shake, death fade, boss glow)
+- ✅ 3 active skills with cooldowns: Power Strike (3× dmg, 8s), Fireball (5× dmg, 15s), Holy Light (skip + gold, 20s)
+- ✅ Inline Lottie VFX for fire/slash/heal effects
+- ✅ Haptic feedback in Telegram via HapticFeedback API
+- ✅ 26/26 backend tests passing including HMAC validation
+
 ## Backlog / Next Tasks
 - P1: Server-side payment verification (TON Center polling treasury wallet)
 - P1: USDT Jetton transfer implementation
+- P1: Auth-gate /api/telegram/notify (anyone can spam any chat_id today)
+- P1: Add auth_date freshness check to initData verification (<24h)
 - P2: Leaderboard UI
 - P2: PvP arena & guilds
 - P2: Sound effects & background music
-- P2: ton_proof signature-based auth
+- P2: Replace inline Lottie VFX with high-quality animations from LottieFiles
+- P2: Migrate webhook secret to X-Telegram-Bot-Api-Secret-Token header
