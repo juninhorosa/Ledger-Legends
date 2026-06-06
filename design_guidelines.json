@@ -1,0 +1,106 @@
+{
+  "theme": "DARK",
+  "archetype": "5 (Luxury / Cinematic Dark Fantasy) mixed with 7 (Electric / Neon accents for magic)",
+  "concept": "WoW-inspired Incremental RPG Web Game with TON Blockchain economy. The UI must feel epic, chunky, and tactile. Instead of a sterile SaaS dashboard, it should feel like an adventurer's command center: dark stone textures, ornate bronze/gold frames, parchment backgrounds for text, and vibrant glowing rarity colors for items.",
+  "colors": {
+    "background": {
+      "base": "#0B0F19",
+      "panel": "#151C2C",
+      "panel_inset": "#080B13"
+    },
+    "text": {
+      "primary": "#E2E8F0",
+      "secondary": "#94A3B8",
+      "highlight": "#FCD34D",
+      "damage": "#EF4444",
+      "heal": "#10B981"
+    },
+    "accents": {
+      "primary": "#D97706",
+      "primary_hover": "#F59E0B",
+      "border_frame": "#475569",
+      "glow": "#06B6D4"
+    },
+    "rarity": {
+      "common": "#9CA3AF",
+      "uncommon": "#10B981",
+      "rare": "#3B82F6",
+      "epic": "#A855F7",
+      "legendary": "#F59E0B"
+    }
+  },
+  "typography": {
+    "headings": {
+      "family": "Cinzel, serif",
+      "weights": ["600", "800"],
+      "usage": "Zone names, panel titles, character name, big level numbers"
+    },
+    "body": {
+      "family": "Outfit, sans-serif",
+      "weights": ["400", "500"],
+      "usage": "Quest text, item descriptions, general UI labels"
+    },
+    "numbers": {
+      "family": "JetBrains Mono, monospace",
+      "weights": ["500", "700"],
+      "usage": "DPS, TON/USDT balances, item stats, damage numbers"
+    }
+  },
+  "layout_and_spacing": {
+    "strategy": "3-Column Desktop Grid for Incremental Gameplay. Center is the primary combat action. Left and right are management panels.",
+    "desktop": {
+      "grid": "grid-cols-12 gap-6",
+      "left_panel": "col-span-3 (Character Stats, Equipment Slots, Battle Meter)",
+      "center_panel": "col-span-6 (Combat Screen, Monster Sprite, Wave Counter, Action Bar)",
+      "right_panel": "col-span-3 (Inventory Grid, Talent Tree, Shop/Crafting)"
+    },
+    "mobile": {
+      "grid": "flex flex-col gap-4",
+      "behavior": "Center combat view stays at top. Management panels become tabs/accordions below combat to save space."
+    },
+    "containers": "Chunky borders (e.g., border-2 or border-4) with border-border_frame. Inner shadow (shadow-inner) to create a recessed look for item slots. Padding p-4 to p-6."
+  },
+  "components": {
+    "panels": "Dark stone/metal colored backgrounds. Add a subtle 1px top border of lighter gray to give a 3D beveled edge effect. Never use pure transparent.",
+    "buttons": "Action buttons should have a gradient background (e.g., bg-gradient-to-b from-amber-600 to-amber-800) with a dark border. On hover, increase brightness and add a drop-shadow glow.",
+    "item_slots": "Square containers with bg-black/40, inset shadows. When an item is slotted, the border color must match the item's rarity.",
+    "progress_bars": "Health (Red), XP (Purple), and Battle Meter (Gold). Must have a dark background track and a bright, animated fill.",
+    "wallet_module": "Top right corner. Shows TON and USDT icons with monospace balances. Connect button uses a distinct glowing blue (TON brand color) to stand out from game UI."
+  },
+  "motion_and_interaction": {
+    "combat": "Monster sprite should gently float/breathe (translate-y-1 up and down). On hit, the monster should quickly flash white and shake.",
+    "damage_numbers": "Floating text that spawns on hit, moves upwards, fades out, and disappears after 1s.",
+    "hover": "Hovering items in inventory should show a rich tooltip with stats, lore, and rarity colored title.",
+    "transitions": "Panel tab switching should be instant or have a very fast (150ms) fade."
+  },
+  "media": {
+    "background_texture": {
+      "url": "https://images.unsplash.com/photo-1597857194715-8935b219f6e9",
+      "description": "Dark brown/gray rock formation. Use as an overlay with low opacity (10-20%) on the body or panels to give a stone texture."
+    },
+    "player_avatar": {
+      "url": "https://images.unsplash.com/photo-1773216344064-e1231ff27d09",
+      "description": "Knight in full armor, use for the character portrait in the left panel."
+    },
+    "monster_orc": {
+      "url": "https://images.unsplash.com/photo-1568223953582-1d0698f0e734",
+      "description": "Orc monster figure holding an axe. Use as the primary enemy sprite in the center combat view."
+    },
+    "loot_weapon": {
+      "url": "https://images.unsplash.com/photo-1764438234563-0225f6c3bd72",
+      "description": "Glowing green abstract shape. Use as a placeholder for a magical rune weapon in the inventory/shop."
+    }
+  },
+  "testing_rules": {
+    "data_testid": "ALL interactive elements (attack buttons, inventory slots, wallet connect, tab switches, upgrade buttons) MUST have a 'data-testid' attribute using kebab-case role-based naming (e.g., 'combat-attack-button', 'inventory-slot-1', 'wallet-connect-button')."
+  },
+  "instructions_to_main_agent": [
+    "Install and use 'lucide-react' for UI icons (swords, shields, coins, settings, etc).",
+    "Implement the TonConnect SDK for the wallet module.",
+    "Set up a centralized store or context for the game state (Gold, TON, USDT, Player Stats, Wave Level).",
+    "Build the bilingual system (EN/PT) using an i18n library or a simple context dictionary.",
+    "Do NOT use basic Shadcn cards for the main layout; build custom HTML/Tailwind panels with thick borders and textures to achieve the WoW/RPG aesthetic. You can use Shadcn for complex logic (Dropdowns, Dialogs for shop).",
+    "Implement the 'Battle Meter' (BM) as an aggregate score of all equipped item stats and talent nodes.",
+    "Ensure the combat loop works automatically or via manual clicking (incremental style)."
+  ]
+}
