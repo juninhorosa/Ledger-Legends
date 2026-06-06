@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect } from "react";
 import { useGame } from "../../store/gameStore";
 import { useI18n } from "../../i18n/I18nContext";
 import { Pause, Play, Sword } from "lucide-react";
@@ -12,7 +12,7 @@ export default function CombatScreen() {
   const d = state.derived();
 
   useEffect(() => {
-    if (!state.monster) state.initRun();
+    if (state.monsters.length === 0) state.initRun();
   }, []);
 
   const handleManualAttack = () => {
@@ -20,8 +20,12 @@ export default function CombatScreen() {
     hapticImpact("light");
   };
 
-  if (!state.monster) return null;
-  const hpPct = (state.monsterHp / state.monster.hp) * 100;
+  const aliveMonsters = state.monsters.filter((m) => m.hp > 0);
+  const totalHp = state.monsters.reduce((a, m) => a + m.hp, 0);
+  const totalMaxHp = state.monsters.reduce((a, m) => a + m.maxHp, 0);
+  const hpPct = totalMaxHp > 0 ? (totalHp / totalMaxHp) * 100 : 0;
+  const primary = state.monsters.find((m) => m.isBoss) || state.monsters[0];
+  const headerName = primary ? primary.name[lang] : "";
 
   return (
     <div data-testid="combat-screen" className="game-panel p-6 flex flex-col gap-4 min-h-[560px]">
@@ -46,18 +50,22 @@ export default function CombatScreen() {
 
       <BattleArena />
 
-      {/* Monster HP bar */}
+      {/* Wave HP aggregate */}
       <div className="space-y-1">
         <div className="flex justify-between font-heading text-amber-200">
-          <span data-testid="monster-name">{state.monster.name[lang]}</span>
-          <span className="font-mono-num text-sm">{state.monsterHp} / {state.monster.hp} HP</span>
+          <span data-testid="monster-name">
+            {headerName}
+            {aliveMonsters.length > 1 && (
+              <span className="text-cyan-300 text-sm font-mono-num ml-2">+{aliveMonsters.length - 1}</span>
+            )}
+          </span>
+          <span className="font-mono-num text-sm">{totalHp} / {totalMaxHp} HP</span>
         </div>
         <div className="bar-track h-4">
           <div className="bar-fill bar-fill-hp" style={{ width: `${hpPct}%` }} />
         </div>
       </div>
 
-      {/* Skills */}
       <SkillsBar />
 
       <div className="flex justify-end">

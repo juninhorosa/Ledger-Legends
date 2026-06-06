@@ -186,6 +186,7 @@ def verify_telegram_init_data(init_data: str, max_age_sec: int = 86400) -> Optio
 
 class TelegramAuthRequest(BaseModel):
     init_data: str
+    referred_by: Optional[int] = None  # Telegram user id of the inviter
 
 @api_router.post("/telegram/auth")
 async def telegram_auth(body: TelegramAuthRequest):
@@ -196,14 +197,50 @@ async def telegram_auth(body: TelegramAuthRequest):
     tg_id = user.get("id")
     if not tg_id:
         raise HTTPException(status_code=400, detail="No user in initData")
+    # Also accept start_param "ref_<userId>" for referrals via deep link
+    ref_id = body.referred_by
+    start_param = parsed.get("start_param")
+    if not ref_id and start_param and start_param.startswith("ref_"):
+        try:
+            ref_id = int(start_param[4:])
+        except ValueError:
+            ref_id = None
+    if ref_id and ref_id == tg_id:
+        ref_id = None  # can't refer yourself
+
     wallet_key = f"tg:{tg_id}"
     existing = await db.players.find_one({"wallet": wallet_key}, {"_id": 0})
+    bonus_granted = False
     if not existing:
         first = user.get("first_name") or "Hero"
         new_player = Player(wallet=wallet_key, name=first[:24])
         doc = new_player.model_dump()
         doc["telegram_id"] = tg_id
         doc["telegram_username"] = user.get("username")
+        # Apply referral bonus
+        if ref_id:
+            inviter_wallet = f"tg:{ref_id}"
+            inviter = await db.players.find_one({"wallet": inviter_wallet}, {"_id": 0})
+            if inviter:
+                # New player gets a starter epic item + 200 gold
+                doc["inventory"] = (doc.get("inventory") or []) + ["rune_blade"]
+                doc["gold"] = (doc.get("gold") or 100) + 200
+                doc["referred_by"] = ref_id
+                # Inviter gets 500 gold + 1 referral counted
+                await db.players.update_one(
+                    {"wallet": inviter_wallet},
+                    {
+                        "$inc": {"gold": 500, "referrals_count": 1},
+                        "$push": {"referred_users": tg_id},
+                        "$set": {"updated_at": datetime.now(timezone.utc).isoformat()},
+                    },
+                )
+                bonus_granted = True
+                # Notify inviter (best-effort)
+                try:
+                    await _tg_send(ref_id, f"🎉 <b>{user.get('first_name', 'A friend')}</b> joined Chronicles of TON via your link! You received <b>+500 gold</b>.")
+                except Exception:
+                    pass
         await db.players.insert_one(doc)
         existing = doc
     return {
@@ -211,6 +248,7 @@ async def telegram_auth(body: TelegramAuthRequest):
         "telegram_id": tg_id,
         "telegram_username": user.get("username"),
         "first_name": user.get("first_name"),
+        "referral_bonus_granted": bonus_granted,
         "player": {k: v for k, v in existing.items() if k != "_id"},
     }
 
@@ -254,14 +292,36 @@ async def telegram_webhook(secret: str, request: Request):
     if not chat_id:
         return {"ok": True}
     if text.startswith("/start"):
+        # Parse referral param from /start ref_<userId>
+        parts = text.split(maxsplit=1)
+        ref_user_id = None
+        if len(parts) > 1 and parts[1].startswith("ref_"):
+            try:
+                ref_user_id = int(parts[1][4:])
+            except ValueError:
+                ref_user_id = None
+        web_app_url = APP_URL
+        if ref_user_id:
+            web_app_url = f"{APP_URL}?ref={ref_user_id}"
         await _tg_send(chat_id,
             "<b>⚔️ Chronicles of TON</b>\n\nEmbark on an epic incremental RPG adventure! Hunt monsters, collect legendary loot, and master the talent tree.\n\n<i>Tap the button below to enter the realm.</i>",
             reply_markup={
-                "inline_keyboard": [[{"text": "🛡️ Play Now", "web_app": {"url": APP_URL}}]]
+                "inline_keyboard": [[{"text": "🛡️ Play Now", "web_app": {"url": web_app_url}}]]
             },
         )
+    elif text.startswith("/invite"):
+        # Provide a referral link
+        user_id = msg.get("from", {}).get("id")
+        if user_id:
+            # Need bot username for t.me link; fall back to getMe
+            async with httpx.AsyncClient(timeout=10.0) as cx:
+                me = (await cx.get(f"{TG_API}/getMe")).json()
+                username = me.get("result", {}).get("username", "")
+            link = f"https://t.me/{username}?start=ref_{user_id}"
+            await _tg_send(chat_id,
+                f"🤝 <b>Invite friends, earn rewards!</b>\n\nShare this link:\n<code>{link}</code>\n\nWhen a friend joins, you both get bonuses:\n• You: <b>+500 gold</b>\n• Friend: <b>+200 gold + Rare weapon</b>")
     elif text.startswith("/help"):
-        await _tg_send(chat_id, "Use /start to open the game. Notifications are sent automatically when bosses appear or rewards are ready.")
+        await _tg_send(chat_id, "Commands:\n/start — Open the game\n/invite — Get your referral link\n\nNotifications are sent automatically when bosses appear or rewards are ready.")
     return {"ok": True}
 
 
@@ -295,11 +355,35 @@ async def telegram_setup():
         r3 = await cx.post(f"{TG_API}/setMyCommands", json={
             "commands": [
                 {"command": "start", "description": "Open Chronicles of TON"},
+                {"command": "invite", "description": "Get your referral link"},
                 {"command": "help", "description": "How to play"},
             ]
         })
         results["setMyCommands"] = r3.json()
     return results
+
+
+@api_router.get("/player/{wallet}/referral")
+async def get_referral_link(wallet: str):
+    """Build a t.me referral link for a player.
+    Wallet must be tg:<id> for this to work."""
+    if not wallet.startswith("tg:"):
+        raise HTTPException(status_code=400, detail="Referral links only work for Telegram users")
+    try:
+        tg_id = int(wallet.split(":", 1)[1])
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid wallet format")
+    async with httpx.AsyncClient(timeout=10.0) as cx:
+        me = (await cx.get(f"{TG_API}/getMe")).json()
+        username = me.get("result", {}).get("username", "")
+    link = f"https://t.me/{username}?start=ref_{tg_id}"
+    player = await db.players.find_one({"wallet": wallet}, {"_id": 0, "referrals_count": 1, "referred_users": 1})
+    return {
+        "link": link,
+        "bot_username": username,
+        "referrals_count": (player or {}).get("referrals_count", 0),
+        "referred_users": (player or {}).get("referred_users", []),
+    }
 
 
 app.include_router(api_router)

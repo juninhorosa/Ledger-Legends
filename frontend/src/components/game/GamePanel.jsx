@@ -35,18 +35,33 @@ export default function GamePanel() {
   // Telegram Mini App auto-auth on mount
   useEffect(() => {
     const tg = initTelegram();
+    // Detect ref param from URL or Telegram startParam
+    const params = new URLSearchParams(window.location.search);
+    const refFromUrl = params.get("ref");
+    const refFromTg = tg?.initDataUnsafe?.start_param?.replace(/^ref_/, "");
+    const refId = refFromUrl || refFromTg;
+    const referredBy = refId ? parseInt(refId, 10) : null;
+
     if (tg && isTelegram()) {
       setTgMode(true);
       const user = getTelegramUser();
       setTgUser(user);
       (async () => {
         try {
-          const r = await api.post("/telegram/auth", { init_data: getInitData() });
+          const r = await api.post("/telegram/auth", {
+            init_data: getInitData(),
+            referred_by: referredBy,
+          });
           const data = r.data;
           game.hydrateFromServer({ ...data.player, wallet: data.wallet });
+          if (data.referral_bonus_granted) {
+            // Welcome with bonus
+            setTimeout(() => {
+              import("sonner").then(({ toast }) => toast.success("🎁 Referral bonus: +200 gold & Rune Blade!"));
+            }, 800);
+          }
           setLoaded(true);
         } catch (e) {
-          // fallback: still allow play
           game.setWallet(`tg:guest`);
           game.initRun();
           setLoaded(true);
@@ -55,7 +70,6 @@ export default function GamePanel() {
       return;
     }
     // Dev / preview mode: ?guest=1 enables play without wallet
-    const params = new URLSearchParams(window.location.search);
     if (params.get("guest") === "1") {
       setTgMode(true);
       setTgUser({ first_name: "Guest", username: "guest" });
