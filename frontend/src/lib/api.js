@@ -46,6 +46,10 @@ export const adminApproveWithdrawal = (wid, admin_id, tx_hash = "", note = "") =
 export const adminRejectWithdrawal = (wid, admin_id, note = "") =>
   api.post(`/admin/withdrawals/${wid}/reject`, { admin_id, note }).then((r) => r.data);
 
+// Player reset
+export const resetPlayerClass = (wallet) =>
+  api.post(`/player/${wallet}/reset-class`).then((r) => r.data);
+
 // Market
 export const marketSell = (wallet, inv_index, sell_price) =>
   api.post(`/market/sell`, { wallet, inv_index, sell_price }).then((r) => r.data);

@@ -286,6 +286,18 @@ async def swap_player_class(body: ClassSwapRequest):
     return {"status": "ok", "class_id": body.new_class_id, "price_ton": CLASS_SWAP_PRICE_TON, "stats": cls["base_stats"]}
 
 
+# ---------- Player Reset (clears class so selection shows again) ----------
+@api_router.post("/player/{wallet}/reset-class")
+async def reset_player_class(wallet: str):
+    result = await db.players.update_one(
+        {"wallet": wallet},
+        {"$set": {"class_id": None, "stats": {}, "updated_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Player not found")
+    return {"status": "reset"}
+
+
 # ---------- Global Market (TON-priced peer listings) ----------
 class MarketListRequest(BaseModel):
     wallet: str

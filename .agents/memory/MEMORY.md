@@ -1,0 +1,2 @@
+- [Proxy setup for Replit](proxy-setup.md) — REACT_APP_BACKEND_URL must be empty; use craco devServer proxy to route /api to localhost:8000.
+- [MongoDB startup](mongodb-startup.md) — MongoDB not pre-installed; workflow must run mongod before uvicorn; data dir: /tmp/mongodb/data.

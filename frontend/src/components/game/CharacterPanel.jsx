@@ -1,8 +1,10 @@
-import React from "react";
+import React, { useState } from "react";
 import { useGame } from "../../store/gameStore";
 import { useI18n } from "../../i18n/I18nContext";
 import { ITEMS, ITEM_ICONS, rarityLabel } from "../../game/items";
-import { Sword, Shield, HardHat, Footprints, Gem, Circle as CircleIcon, Heart, Swords, ShieldCheck, Sparkles } from "lucide-react";
+import { resetPlayerClass } from "../../lib/api";
+import { toast } from "sonner";
+import { Sword, Shield, HardHat, Footprints, Gem, Circle as CircleIcon, Heart, Swords, ShieldCheck, Sparkles, RotateCcw } from "lucide-react";
 
 const SLOT_ICONS = {
   weapon: Sword,
@@ -20,8 +22,24 @@ export default function CharacterPanel() {
   const state = useGame();
   const d = state.derived();
   const equipment = state.equipment;
+  const [resetting, setResetting] = useState(false);
 
   const playerAvatar = "https://images.unsplash.com/photo-1773216344064-e1231ff27d09?w=400&q=70";
+
+  const handleReset = async () => {
+    if (!state.wallet) return;
+    if (!window.confirm(lang === "pt" ? "Resetar personagem? Você escolherá a classe novamente." : "Reset character? You will re-select your class.")) return;
+    setResetting(true);
+    try {
+      await resetPlayerClass(state.wallet);
+      useGame.setState({ classId: null, stats: {} });
+      toast.success(lang === "pt" ? "Personagem resetado!" : "Character reset!");
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Reset failed");
+    } finally {
+      setResetting(false);
+    }
+  };
 
   return (
     <div data-testid="character-panel" className="game-panel p-5 flex flex-col gap-4">
@@ -67,6 +85,17 @@ export default function CharacterPanel() {
         <Stat label={t("stamina").slice(0, 3).toUpperCase()} value={d.totalSta} />
         <Stat label={`CRIT`} value={`${(d.critChance * 100).toFixed(0)}%`} />
       </div>
+
+      {/* Reset button */}
+      <button
+        onClick={handleReset}
+        disabled={resetting}
+        className="tab-pill flex items-center gap-1 text-xs text-rose-400 border-rose-700/50 hover:bg-rose-950/40 disabled:opacity-50"
+        title={lang === "pt" ? "Resetar classe do personagem" : "Reset character class"}
+      >
+        <RotateCcw size={12} />
+        {resetting ? "..." : lang === "pt" ? "Resetar Classe" : "Reset Class"}
+      </button>
 
       {/* Equipment slots */}
       <div>
