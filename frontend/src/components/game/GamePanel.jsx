@@ -11,12 +11,14 @@ import TalentTree from "./TalentTree";
 import Crafting from "./Crafting";
 import SeasonPass from "./SeasonPass";
 import Shop from "./Shop";
+import EconomyShop from "./EconomyShop";
 import WalletPanel from "../wallet/WalletPanel";
-import { Globe2, Save, Sword, Backpack, Hammer, Star, Sparkles, Calendar } from "lucide-react";
+import { Globe2, Save, Sword, Backpack, Hammer, Star, Sparkles, Calendar, Coins } from "lucide-react";
 
 const TABS = [
   { id: "inventory", icon: Backpack, key: "inventory" },
   { id: "shop", icon: Sparkles, key: "shop" },
+  { id: "economy", icon: Coins, key: "economy" },
   { id: "crafting", icon: Hammer, key: "crafting" },
   { id: "talents", icon: Star, key: "talents" },
   { id: "season", icon: Calendar, key: "seasonPass" },
@@ -175,6 +177,7 @@ export default function GamePanel() {
 
           {activeTab === "inventory" && <InventoryPanel />}
           {activeTab === "shop" && <Shop />}
+          {activeTab === "economy" && <EconomyShop />}
           {activeTab === "crafting" && <Crafting />}
           {activeTab === "talents" && <TalentTree />}
           {activeTab === "season" && <SeasonPass />}

@@ -84,6 +84,7 @@ class Player(BaseModel):
     vip_level: int = 0
     vip_purchased_levels: List[int] = Field(default_factory=list)
     xp_pack_expires_at: Optional[str] = None
+    start_pack_purchased: bool = False
     telegram_id: Optional[int] = None
     telegram_username: Optional[str] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
@@ -514,7 +515,7 @@ async def deposits_history(wallet: str, limit: int = 20):
 async def get_balance(wallet: str):
     p = await db.players.find_one(
         {"wallet": wallet},
-        {"_id": 0, "ton_balance": 1, "vip_level": 1, "xp_pack_expires_at": 1, "gold": 1},
+        {"_id": 0, "ton_balance": 1, "vip_level": 1, "xp_pack_expires_at": 1, "gold": 1, "start_pack_purchased": 1},
     )
     if not p:
         return {
@@ -523,6 +524,7 @@ async def get_balance(wallet: str):
             "gold": 0,
             "xp_pack_active": False,
             "xp_pack_expires_at": None,
+            "start_pack_purchased": False,
             "vip_benefits": vip_benefits(0),
         }
     xp_exp = p.get("xp_pack_expires_at")
@@ -539,6 +541,7 @@ async def get_balance(wallet: str):
         "gold": int(p.get("gold", 0)),
         "xp_pack_active": active,
         "xp_pack_expires_at": xp_exp,
+        "start_pack_purchased": bool(p.get("start_pack_purchased")),
         "vip_benefits": vip_benefits(level),
     }
 
@@ -554,6 +557,221 @@ async def vip_catalog():
             "benefits": vip_benefits(lvl),
         })
     return {"items": items}
+
+
+# ---------- Packs catalogue + purchase ----------
+PACKS: Dict[str, Dict[str, Any]] = {
+    "start": {
+        "id": "start",
+        "name": {"en": "Starter Pack", "pt": "Pacote Inicial"},
+        "description": {
+            "en": "+5,000 gold, 1 rare item and 24h XP boost. Once per player.",
+            "pt": "+5.000 ouro, 1 item raro e impulso de XP por 24h. Uma vez por jogador.",
+        },
+        "price_ton": 5.0,
+        "one_time": True,
+        "rewards": {
+            "gold": 5000,
+            "item": "rune_blade",
+            "xp_boost_hours": 24,
+        },
+    },
+    "xp": {
+        "id": "xp",
+        "name": {"en": "XP Pack", "pt": "Pacote de XP"},
+        "description": {
+            "en": "Doubles XP gains for 7 days. Stacks by extending duration.",
+            "pt": "Dobra o XP recebido por 7 dias. Compra repetida estende a duração.",
+        },
+        "price_ton": 1.5,
+        "one_time": False,
+        "duration_days": 7,
+        "xp_multiplier": 2.0,
+    },
+}
+
+
+class PackBuyRequest(BaseModel):
+    wallet: str
+    pack_id: str
+
+
+@api_router.get("/pack/catalog")
+async def pack_catalog():
+    return {"items": list(PACKS.values())}
+
+
+def _extend_xp_pack(current_iso: Optional[str], add_seconds: int) -> str:
+    """Return a new ISO timestamp extending an existing xp pack expiry, or starting from now."""
+    now = datetime.now(timezone.utc)
+    base = now
+    if current_iso:
+        try:
+            existing = datetime.fromisoformat(current_iso.replace('Z', '+00:00'))
+            if existing > now:
+                base = existing
+        except Exception:
+            base = now
+    return (base + timedelta(seconds=add_seconds)).isoformat()
+
+
+@api_router.post("/pack/buy")
+async def pack_buy(body: PackBuyRequest):
+    pack = PACKS.get(body.pack_id)
+    if not pack:
+        raise HTTPException(status_code=404, detail="Pack not found")
+    player = await db.players.find_one({"wallet": body.wallet}, {"_id": 0})
+    if not player:
+        raise HTTPException(status_code=404, detail="Player not found")
+    price = float(pack["price_ton"])
+    if float(player.get("ton_balance", 0.0)) < price - 1e-9:
+        raise HTTPException(status_code=400, detail="Insufficient TON balance")
+    if pack.get("one_time") and bool(player.get("start_pack_purchased")):
+        raise HTTPException(status_code=400, detail="Pack already purchased")
+
+    # ---- Compute updates ----
+    inc_fields: Dict[str, Any] = {"ton_balance": -price}
+    set_fields: Dict[str, Any] = {"updated_at": datetime.now(timezone.utc).isoformat()}
+    push_fields: Dict[str, Any] = {}
+
+    rewards_summary: Dict[str, Any] = {"pack_id": pack["id"], "price_ton": price}
+
+    if body.pack_id == "start":
+        rewards = pack["rewards"]
+        inc_fields["gold"] = int(rewards.get("gold", 0))
+        item_id = rewards.get("item")
+        if item_id:
+            push_fields["inventory"] = item_id
+        boost_hours = int(rewards.get("xp_boost_hours", 0))
+        if boost_hours > 0:
+            new_exp = _extend_xp_pack(player.get("xp_pack_expires_at"), boost_hours * 3600)
+            set_fields["xp_pack_expires_at"] = new_exp
+            rewards_summary["xp_pack_expires_at"] = new_exp
+        set_fields["start_pack_purchased"] = True
+        rewards_summary.update({"gold": int(rewards.get("gold", 0)), "item": item_id})
+
+    elif body.pack_id == "xp":
+        days = int(pack.get("duration_days", 7))
+        new_exp = _extend_xp_pack(player.get("xp_pack_expires_at"), days * 86400)
+        set_fields["xp_pack_expires_at"] = new_exp
+        rewards_summary["xp_pack_expires_at"] = new_exp
+        rewards_summary["duration_days"] = days
+
+    update_doc: Dict[str, Any] = {"$inc": inc_fields, "$set": set_fields}
+    if push_fields:
+        update_doc["$push"] = push_fields
+    await db.players.update_one({"wallet": body.wallet}, update_doc)
+
+    # Audit log
+    await db.pack_purchases.insert_one({
+        "id": str(uuid.uuid4()),
+        "wallet": body.wallet,
+        "pack_id": pack["id"],
+        "price_ton": price,
+        "rewards": rewards_summary,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+
+    updated = await db.players.find_one(
+        {"wallet": body.wallet},
+        {"_id": 0, "ton_balance": 1, "gold": 1, "xp_pack_expires_at": 1, "start_pack_purchased": 1, "inventory": 1},
+    )
+
+    # Best-effort Telegram notif
+    if body.wallet.startswith("tg:"):
+        try:
+            tg_id = int(body.wallet.split(":", 1)[1])
+            label = pack["name"].get("pt", pack["name"]["en"])
+            await _tg_send(tg_id, f"<b>{label}</b> ativado!\n-{price:.2f} TON debitado do seu saldo.")
+        except Exception:
+            pass
+
+    return {
+        "status": "ok",
+        "rewards": rewards_summary,
+        "ton_balance": float(updated.get("ton_balance", 0.0)),
+        "gold": int(updated.get("gold", 0)),
+        "xp_pack_expires_at": updated.get("xp_pack_expires_at"),
+        "start_pack_purchased": bool(updated.get("start_pack_purchased")),
+        "inventory": updated.get("inventory", []),
+    }
+
+
+# ---------- VIP purchase ----------
+class VipBuyRequest(BaseModel):
+    wallet: str
+    target_level: int = Field(ge=1, le=30)
+
+
+@api_router.post("/vip/buy")
+async def vip_buy(body: VipBuyRequest):
+    player = await db.players.find_one({"wallet": body.wallet}, {"_id": 0})
+    if not player:
+        raise HTTPException(status_code=404, detail="Player not found")
+    current = int(player.get("vip_level") or 0)
+    if body.target_level <= current:
+        raise HTTPException(status_code=400, detail="Target level must be greater than current VIP level")
+
+    # Cumulative price of levels (current+1) .. target_level
+    levels_to_buy = list(range(current + 1, body.target_level + 1))
+    total_price = round(sum(vip_price_ton(lv) for lv in levels_to_buy), 4)
+    if float(player.get("ton_balance", 0.0)) < total_price - 1e-9:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Insufficient TON balance (need {total_price:.4f}, have {float(player.get('ton_balance', 0.0)):.4f})",
+        )
+
+    purchased = list(player.get("vip_purchased_levels") or [])
+    purchased.extend(levels_to_buy)
+
+    await db.players.update_one(
+        {"wallet": body.wallet},
+        {
+            "$inc": {"ton_balance": -total_price},
+            "$set": {
+                "vip_level": body.target_level,
+                "vip_purchased_levels": purchased,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+        },
+    )
+
+    # Audit log
+    await db.vip_purchases.insert_one({
+        "id": str(uuid.uuid4()),
+        "wallet": body.wallet,
+        "from_level": current,
+        "to_level": body.target_level,
+        "levels": levels_to_buy,
+        "price_ton": total_price,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+
+    updated = await db.players.find_one(
+        {"wallet": body.wallet},
+        {"_id": 0, "ton_balance": 1, "vip_level": 1},
+    )
+
+    if body.wallet.startswith("tg:"):
+        try:
+            tg_id = int(body.wallet.split(":", 1)[1])
+            await _tg_send(
+                tg_id,
+                f"<b>VIP Lv {body.target_level}</b> ativado!\nCusto total: {total_price:.2f} TON.",
+            )
+        except Exception:
+            pass
+
+    return {
+        "status": "ok",
+        "from_level": current,
+        "to_level": body.target_level,
+        "levels_purchased": levels_to_buy,
+        "price_ton": total_price,
+        "ton_balance": float(updated.get("ton_balance", 0.0)),
+        "vip_level": int(updated.get("vip_level", 0)),
+        "benefits": vip_benefits(body.target_level),
+    }
 
 
 # ---------- Background TON deposit poller ----------

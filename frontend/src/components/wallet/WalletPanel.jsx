@@ -3,7 +3,7 @@ import { useTonAddress, useTonConnectUI, useTonWallet } from "@tonconnect/ui-rea
 import { Wallet as WalletIcon, LogOut, Copy, ArrowDownToLine } from "lucide-react";
 import { useI18n } from "../../i18n/I18nContext";
 import { toast } from "sonner";
-import { useGameStore } from "../../store/gameStore";
+import { useGame } from "../../store/gameStore";
 import { getBalance } from "../../lib/api";
 import DepositDialog from "./DepositDialog";
 
@@ -15,7 +15,7 @@ export default function WalletPanel() {
   const [balance, setBalance] = useState({ ton: 0, usdt: 0 });
   const [inGame, setInGame] = useState({ ton_balance: 0, vip_level: 0 });
   const [depositOpen, setDepositOpen] = useState(false);
-  const playerWallet = useGameStore((s) => s.wallet);
+  const playerWallet = useGame((s) => s.wallet);
 
   // On-chain wallet TON balance (public TON Center read)
   useEffect(() => {

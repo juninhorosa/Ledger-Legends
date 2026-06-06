@@ -1,0 +1,45 @@
+{
+  "summary": "Iteration 4 — Backend Phase 1 (Deposits) + Phase 2 (Packs & VIP) end-to-end testing + frontend Economy smoke validation. Created /app/backend/tests/test_ton_economy_phase12.py (20 tests, all passing). Verified deposit init/status/history, balance (zero-default + after manual credit), pack & VIP catalogs, pack buy (start one-time, xp stackable extension semantics, insufficient balance 400, unknown pack 404, already-purchased 400), VIP buy (0→3 cumulative price 10.4 TON with [1,2,3] purchased & benefits match vip_benefits(3), target<=current 400, insufficient 400, target=31 & target=0 → 422), and audit logs persisted to pack_purchases / vip_purchases collections. Frontend smoke: ?guest=1 loads cleanly with NO console errors; tab-economy reveals economy-shop with Packs tab default showing both pack cards & bilingual copy & correct prices (5 TON / 1.5 TON); economy-tab-vip shows vip-row-1..30, vip-buy buttons, current-vip-level='Lv 0', economy-balance='0.0000 TON'.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/deposit/init", "issue": "expires_in_sec returned as 1800s (30min) but _expire_old_deposits() uses a 1h cutoff — the client-visible expiry and the server-side reap window are inconsistent. Document or align (likely raise expires_in_sec to 3600 or lower the reap cutoff)."},
+      {"endpoint": "/api/pack/buy", "issue": "one_time check uses player.start_pack_purchased regardless of pack_id, so if another future one_time pack is added it will incorrectly share the start_pack_purchased flag. Use a per-pack purchased flag (e.g., purchased_packs: List[str])."},
+      {"endpoint": "/api/balance/{wallet}", "issue": "Non-existent wallet returns 200 with zeros (per spec), but does NOT persist a player doc. Consistent but worth noting since /api/player/{wallet} GET DOES auto-create — UX asymmetry."},
+      {"endpoint": "/api/vip/buy", "issue": "vip_purchased_levels stored as a Python list and extended in-process — race-safe only because pymongo $set replaces; concurrent purchases for the same wallet could lose levels. Consider $push with $each + transactional balance check."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Economy → VIP tab", "issues": ["VIP row layout cramped: benefit chips (+2% XP, +1% Gold, +1% DMG, 10% tax) wrap awkwardly around the price label '1.6 TON' on a 1280px viewport. Consider a grid: [Lv badge | benefits column | price | CTA] with consistent column widths."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_ton_economy_phase12.py",
+    "/app/test_reports/pytest/pytest_phase12.xml"
+  ],
+  "action_items": [
+    "Align deposit init expires_in_sec (1800s) with _expire_old_deposits cutoff (1h) — pick one source of truth.",
+    "Refactor one_time pack tracking to per-pack flag to support future one-time packs.",
+    "Polish VIP row layout in EconomyShop.jsx (grid columns) so benefits don't wrap around the price."
+  ],
+  "critical_code_review_comments": [
+    "VIP & pack purchases are not atomic: balance check + $inc are separate read/write operations. A racing double-click can debit twice. Consider a conditional update like update_one({wallet, ton_balance: {$gte: price}}, {$inc: {ton_balance: -price}}) and check modified_count.",
+    "TREASURY_WALLET is read at import time; if rotated, requires a service restart. Acceptable but document it.",
+    "_extend_xp_pack tolerates malformed ISO timestamps by falling back to now() — silently masks data corruption. Add a logger.warning when fallback triggers.",
+    "Pack/VIP buy endpoints do not require auth (no Telegram initData check). Anyone who knows a wallet string can purchase on its behalf — but since ton_balance can only be credited by real on-chain deposits to TREASURY_WALLET with the wallet's comment, the attack surface is limited to spending another user's confirmed balance. Worth gating with initData or a session token in Phase 3.",
+    "Audit-log collections (pack_purchases, vip_purchases) lack indexes on wallet + created_at. Add for query perf as volume grows."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_ton_economy_phase12.py (new)"
+  ],
+  "success_rate": {"backend": "100% (20/20 Phase-1+2 tests passed)", "frontend": "100% (smoke: economy tab, packs tab, vip tab all render with correct testids and zero console errors)"},
+  "test_credentials": "No auth used. Test wallets generated as TEST_<category>_<uuid8>. Mongo credentials read from /app/backend/.env (DB_NAME=chronicles_of_ton).",
+  "seed_data_creation": "Test wallets credited directly via Mongo with $set:{ton_balance:N} after API auto-creates the player doc (per /app/memory/test_credentials.md procedure). All TEST_* wallets cleaned up in module-scope teardown across collections: players, deposits, pack_purchases, vip_purchases.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Phase 1+2 backend is solid. For Phase 3+ (withdrawals, admin panel), reuse the helper pattern: _credit(mongo, wallet, amount) which auto-creates the player via GET /api/player/{wallet} then directly updates ton_balance. Audit log collections to inspect: pack_purchases, vip_purchases (both indexed by wallet+created_at recommended). Frontend test IDs verified working: tab-economy, economy-shop, economy-tab-packs, economy-tab-vip, pack-card-start, pack-card-xp, pack-buy-start, pack-buy-xp, vip-row-N (N=1..30), vip-buy-N, economy-balance, current-vip-level.",
+  "rca of the issue": "N/A — no bugs found this iteration. All Phase 1+2 acceptance criteria from the review request pass."
+}

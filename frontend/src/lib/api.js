@@ -7,7 +7,7 @@ export const api = axios.create({ baseURL: API, timeout: 20000 });
 
 // Players
 export const savePlayer = (wallet, payload) =>
-  api.post(`/player/${wallet}`, payload).then((r) => r.data);
+  api.post(`/player/${wallet}/save`, payload).then((r) => r.data);
 export const loadPlayer = (wallet) =>
   api.get(`/player/${wallet}`).then((r) => r.data);
 export const getLeaderboard = () => api.get(`/leaderboard`).then((r) => r.data);
@@ -23,3 +23,14 @@ export const getBalance = (wallet) =>
   api.get(`/balance/${wallet}`).then((r) => r.data);
 export const getVipCatalog = () =>
   api.get(`/vip/catalog`).then((r) => r.data);
+export const buyVip = (wallet, target_level) =>
+  api.post(`/vip/buy`, { wallet, target_level }).then((r) => r.data);
+export const getPackCatalog = () =>
+  api.get(`/pack/catalog`).then((r) => r.data);
+export const buyPack = (wallet, pack_id) =>
+  api.post(`/pack/buy`, { wallet, pack_id }).then((r) => r.data);
+
+// Aliases used by legacy components
+export const fetchPlayer = loadPlayer;
+export const recordPurchase = (wallet, payload) =>
+  api.post(`/player/${wallet}/purchase`, payload).then((r) => r.data);
