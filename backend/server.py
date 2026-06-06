@@ -7,12 +7,15 @@ import logging
 import hmac
 import hashlib
 import json
+import asyncio
+import secrets
+import uuid
 from urllib.parse import unquote, parse_qsl
 import httpx
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional, Dict, Any
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -25,6 +28,19 @@ TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
 TELEGRAM_WEBHOOK_SECRET = os.environ.get('TELEGRAM_WEBHOOK_SECRET', 'secret')
 APP_URL = os.environ.get('APP_URL', '')
 TG_API = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+
+# ---- TON Economy ----
+TREASURY_WALLET = os.environ.get('TREASURY_WALLET', '')
+ADMIN_TELEGRAM_IDS = set(
+    int(x.strip()) for x in os.environ.get('ADMIN_TELEGRAM_IDS', '').split(',') if x.strip().isdigit()
+)
+TON_CENTER_API_KEY = os.environ.get('TON_CENTER_API_KEY', '')
+TON_NETWORK = os.environ.get('TON_NETWORK', 'mainnet')
+TON_CENTER_BASE = (
+    "https://toncenter.com/api/v2" if TON_NETWORK == 'mainnet'
+    else "https://testnet.toncenter.com/api/v2"
+)
+DEPOSIT_POLL_INTERVAL = int(os.environ.get('DEPOSIT_POLL_INTERVAL', '30'))
 
 app = FastAPI(title="Chronicles of TON API")
 api_router = APIRouter(prefix="/api")
@@ -63,6 +79,13 @@ class Player(BaseModel):
     season_xp: int = 0
     season_claimed: List[int] = Field(default_factory=list)
     battle_meter: int = 100
+    # ---- TON Economy ----
+    ton_balance: float = 0.0  # internal balance (deposited & not yet withdrawn/spent)
+    vip_level: int = 0
+    vip_purchased_levels: List[int] = Field(default_factory=list)
+    xp_pack_expires_at: Optional[str] = None
+    telegram_id: Optional[int] = None
+    telegram_username: Optional[str] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -386,7 +409,251 @@ async def get_referral_link(wallet: str):
     }
 
 
-app.include_router(api_router)
+# =====================================================================
+# ===================== TON ECONOMY (Phase 1) =========================
+# =====================================================================
+
+# ---------- Models ----------
+class DepositInit(BaseModel):
+    wallet: str
+    amount_ton: float = Field(gt=0, le=10000)
+
+
+class Deposit(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    wallet: str
+    amount_ton: float
+    amount_nano: int
+    comment: str
+    status: str = "pending"  # pending | confirmed | expired
+    tx_hash: Optional[str] = None
+    from_address: Optional[str] = None
+    received_nano: Optional[int] = None
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    confirmed_at: Optional[str] = None
+
+
+# ---------- VIP catalogue helper ----------
+def vip_price_ton(level: int) -> float:
+    """Cost (in TON) to purchase a specific VIP level (cumulative model: must own previous)."""
+    if level < 1 or level > 30:
+        return 0.0
+    # progressive curve: level*1.5 + level^2 * 0.1
+    return round(level * 1.5 + (level * level) * 0.1, 2)
+
+
+def vip_benefits(level: int) -> dict:
+    """Cumulative benefits for a given VIP level (1..30)."""
+    if level < 1:
+        return {
+            "market_tax_pct": 20,
+            "gold_drop_bonus_pct": 0,
+            "xp_gain_bonus_pct": 0,
+            "extra_inventory_slots": 0,
+            "damage_bonus_pct": 0,
+            "badge": None,
+        }
+    market_tax = 10
+    if level >= 20:
+        market_tax = 8
+    if level >= 30:
+        market_tax = 5
+    return {
+        "market_tax_pct": market_tax,
+        "gold_drop_bonus_pct": min(level, 30),                # +1% per level cap 30
+        "xp_gain_bonus_pct": min(level * 2, 60),               # up to +60%
+        "extra_inventory_slots": (level // 5),                 # +1 slot every 5 levels
+        "damage_bonus_pct": min(level, 30),                    # +1% per level
+        "badge": "gold" if level >= 30 else ("silver" if level >= 15 else ("bronze" if level >= 1 else None)),
+    }
+
+
+# ---------- Endpoints: Deposits ----------
+@api_router.post("/deposit/init")
+async def deposit_init(body: DepositInit):
+    if not TREASURY_WALLET:
+        raise HTTPException(status_code=500, detail="Treasury wallet not configured")
+    comment = f"dep_{secrets.token_hex(4)}"
+    # Guarantee uniqueness
+    while await db.deposits.find_one({"comment": comment}):
+        comment = f"dep_{secrets.token_hex(4)}"
+    amount_nano = int(round(body.amount_ton * 1e9))
+    dep = Deposit(
+        wallet=body.wallet,
+        amount_ton=body.amount_ton,
+        amount_nano=amount_nano,
+        comment=comment,
+    )
+    await db.deposits.insert_one(dep.model_dump())
+    return {
+        "deposit_id": dep.id,
+        "treasury_address": TREASURY_WALLET,
+        "amount_ton": body.amount_ton,
+        "amount_nano": amount_nano,
+        "comment": comment,
+        "expires_in_sec": 1800,
+        "network": TON_NETWORK,
+    }
+
+
+@api_router.get("/deposit/status/{deposit_id}")
+async def deposit_status(deposit_id: str):
+    doc = await db.deposits.find_one({"id": deposit_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Deposit not found")
+    return doc
+
+
+@api_router.get("/deposits/{wallet}")
+async def deposits_history(wallet: str, limit: int = 20):
+    cursor = db.deposits.find({"wallet": wallet}, {"_id": 0}).sort("created_at", -1).limit(limit)
+    return await cursor.to_list(limit)
+
+
+@api_router.get("/balance/{wallet}")
+async def get_balance(wallet: str):
+    p = await db.players.find_one(
+        {"wallet": wallet},
+        {"_id": 0, "ton_balance": 1, "vip_level": 1, "xp_pack_expires_at": 1, "gold": 1},
+    )
+    if not p:
+        return {
+            "ton_balance": 0.0,
+            "vip_level": 0,
+            "gold": 0,
+            "xp_pack_active": False,
+            "xp_pack_expires_at": None,
+            "vip_benefits": vip_benefits(0),
+        }
+    xp_exp = p.get("xp_pack_expires_at")
+    active = False
+    if xp_exp:
+        try:
+            active = datetime.fromisoformat(xp_exp.replace('Z', '+00:00')) > datetime.now(timezone.utc)
+        except Exception:
+            active = False
+    level = int(p.get("vip_level") or 0)
+    return {
+        "ton_balance": float(p.get("ton_balance", 0.0)),
+        "vip_level": level,
+        "gold": int(p.get("gold", 0)),
+        "xp_pack_active": active,
+        "xp_pack_expires_at": xp_exp,
+        "vip_benefits": vip_benefits(level),
+    }
+
+
+@api_router.get("/vip/catalog")
+async def vip_catalog():
+    """Return the full VIP catalog with prices and cumulative benefits."""
+    items = []
+    for lvl in range(1, 31):
+        items.append({
+            "level": lvl,
+            "price_ton": vip_price_ton(lvl),
+            "benefits": vip_benefits(lvl),
+        })
+    return {"items": items}
+
+
+# ---------- Background TON deposit poller ----------
+async def _poll_ton_deposits_once():
+    if not TREASURY_WALLET:
+        return
+    params = {"address": TREASURY_WALLET, "limit": 30, "archival": "true"}
+    headers = {}
+    if TON_CENTER_API_KEY:
+        headers["X-API-Key"] = TON_CENTER_API_KEY
+    try:
+        async with httpx.AsyncClient(timeout=15.0, headers=headers) as cx:
+            r = await cx.get(f"{TON_CENTER_BASE}/getTransactions", params=params)
+            data = r.json()
+    except Exception as e:
+        logger.warning("TON Center fetch failed: %s", e)
+        return
+    if not data.get("ok"):
+        logger.warning("TON Center returned not-ok: %s", data)
+        return
+    for tx in data.get("result", []):
+        in_msg = tx.get("in_msg") or {}
+        comment = (in_msg.get("message") or "").strip()
+        if not comment or not comment.startswith("dep_"):
+            continue
+        deposit = await db.deposits.find_one({"comment": comment, "status": "pending"})
+        if not deposit:
+            continue
+        try:
+            value_nano = int(in_msg.get("value") or 0)
+        except (TypeError, ValueError):
+            value_nano = 0
+        # Tolerance: accept if user paid >= expected - 1000 nano (network fees rounding)
+        if value_nano < (deposit["amount_nano"] - 1000):
+            continue
+        tx_hash = (tx.get("transaction_id") or {}).get("hash")
+        from_addr = in_msg.get("source")
+        upd = await db.deposits.update_one(
+            {"id": deposit["id"], "status": "pending"},
+            {"$set": {
+                "status": "confirmed",
+                "tx_hash": tx_hash,
+                "from_address": from_addr,
+                "confirmed_at": datetime.now(timezone.utc).isoformat(),
+                "received_nano": value_nano,
+            }},
+        )
+        if upd.modified_count == 0:
+            continue
+        credit_ton = value_nano / 1e9
+        await db.players.update_one(
+            {"wallet": deposit["wallet"]},
+            {
+                "$inc": {"ton_balance": credit_ton},
+                "$set": {"updated_at": datetime.now(timezone.utc).isoformat()},
+            },
+            upsert=True,
+        )
+        logger.info("Deposit confirmed: %s = %s TON (wallet=%s)", deposit["id"], credit_ton, deposit["wallet"])
+        # Telegram notification (best-effort)
+        if deposit["wallet"].startswith("tg:"):
+            try:
+                tg_id = int(deposit["wallet"].split(":", 1)[1])
+                await _tg_send(
+                    tg_id,
+                    f"<b>Deposit confirmed</b>\n+{credit_ton:.4f} TON added to your in-game balance."
+                )
+            except Exception:
+                pass
+
+
+async def _expire_old_deposits():
+    """Mark pending deposits older than 1h as expired."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    await db.deposits.update_many(
+        {"status": "pending", "created_at": {"$lt": cutoff}},
+        {"$set": {"status": "expired"}},
+    )
+
+
+async def _ton_poller_loop():
+    await asyncio.sleep(5)
+    while True:
+        try:
+            await _poll_ton_deposits_once()
+            await _expire_old_deposits()
+        except Exception as e:
+            logger.warning("Poller loop iteration error: %s", e)
+        await asyncio.sleep(DEPOSIT_POLL_INTERVAL)
+
+
+@app.on_event("startup")
+async def _start_pollers():
+    if TREASURY_WALLET:
+        asyncio.create_task(_ton_poller_loop())
+        logger.info("TON deposit poller started (network=%s, treasury=%s, interval=%ss)",
+                    TON_NETWORK, TREASURY_WALLET, DEPOSIT_POLL_INTERVAL)
+    else:
+        logger.warning("TREASURY_WALLET not configured; TON poller disabled")
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -398,6 +665,9 @@ app.add_middleware(
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+# Register the router AFTER all endpoints have been defined above.
+app.include_router(api_router)
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
