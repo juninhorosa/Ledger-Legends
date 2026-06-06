@@ -80,6 +80,16 @@ webpackConfig.devServer = (devServerConfig) => {
   devServerConfig.host = "0.0.0.0";
   devServerConfig.port = 5000;
 
+  // Proxy /api calls to the backend so browsers never need to reach localhost:8000 directly
+  devServerConfig.proxy = [
+    {
+      context: ["/api"],
+      target: "http://localhost:8000",
+      changeOrigin: true,
+      secure: false,
+    },
+  ];
+
   // Add health check endpoints if enabled
   if (config.enableHealthCheck && setupHealthEndpoints && healthPluginInstance) {
     const originalSetupMiddlewares = devServerConfig.setupMiddlewares;
