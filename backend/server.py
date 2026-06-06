@@ -169,10 +169,22 @@ async def purchase_item(wallet: str, body: PurchaseRequest):
 
 
 # ---------- Market: sell inventory item with VIP-based tax ----------
+# Sell prices mirrored from frontend ITEMS by id (server-side authority — never trust client price)
+ITEM_SELL_VALUES: Dict[str, int] = {
+    "rusty_sword": 8, "iron_axe": 25, "rune_blade": 80, "dragonfang": 240, "sunforge": 900,
+    "leather_cap": 6, "iron_helm": 22, "rune_helm": 70, "dragonscale_helm": 220,
+    "cloth_robe": 7, "chainmail": 28, "rune_plate": 90, "dragon_plate": 280,
+    "worn_boots": 5, "iron_boots": 20, "rune_boots": 65,
+    "copper_ring": 6, "silver_ring": 24, "rune_ring": 75,
+    "amulet_of_power": 250, "amulet_of_kings": 950,
+}
+
+
 class MarketSellRequest(BaseModel):
     wallet: str
     inv_index: int = Field(ge=0)
-    sell_price: int = Field(gt=0)  # gross sale price (gold) before tax
+    # sell_price field is IGNORED for compatibility — server uses ITEM_SELL_VALUES
+    sell_price: Optional[int] = None
 
 
 @api_router.post("/market/sell")
@@ -184,14 +196,12 @@ async def market_sell(body: MarketSellRequest):
     if body.inv_index >= len(inv):
         raise HTTPException(status_code=400, detail="Invalid inventory index")
     item_id = inv.pop(body.inv_index)
+    # Server-side authoritative price (anti gold-mint exploit)
+    server_price = ITEM_SELL_VALUES.get(item_id, 1)
     vip_lv = int(player.get("vip_level") or 0)
-    tax_pct = 10 if vip_lv >= 1 else 20
-    if vip_lv >= 20:
-        tax_pct = 8
-    if vip_lv >= 30:
-        tax_pct = 5
-    net_gold = int(body.sell_price * (100 - tax_pct) / 100)
-    tax_gold = body.sell_price - net_gold
+    tax_pct = int(vip_benefits(vip_lv).get("market_tax_pct", 20))
+    net_gold = int(server_price * (100 - tax_pct) / 100)
+    tax_gold = server_price - net_gold
     await db.players.update_one(
         {"wallet": body.wallet},
         {
@@ -203,7 +213,7 @@ async def market_sell(body: MarketSellRequest):
         "id": str(uuid.uuid4()),
         "wallet": body.wallet,
         "item_id": item_id,
-        "sell_price": body.sell_price,
+        "sell_price": server_price,
         "tax_pct": tax_pct,
         "tax_gold": tax_gold,
         "net_gold": net_gold,
@@ -213,7 +223,7 @@ async def market_sell(body: MarketSellRequest):
     return {
         "status": "ok",
         "item_id": item_id,
-        "gross_gold": body.sell_price,
+        "gross_gold": server_price,
         "tax_pct": tax_pct,
         "tax_gold": tax_gold,
         "net_gold": net_gold,
@@ -851,9 +861,31 @@ class WithdrawRequest(BaseModel):
 
 
 class AdminActionRequest(BaseModel):
-    admin_id: int
+    admin_id: Optional[int] = None  # legacy / dev fallback
+    init_data: Optional[str] = None  # preferred: Telegram WebApp initData
     note: Optional[str] = None
     tx_hash: Optional[str] = None  # provided on approval after admin pays out manually
+
+
+def _resolve_admin_id(body: "AdminActionRequest") -> int:
+    """Return the authoritative admin Telegram id from this request.
+
+    Prefers signed initData (real production path). Falls back to body.admin_id
+    only for dev/testing — that path is trivially spoofable and should not be
+    relied on once a Telegram-only deployment is locked in.
+    """
+    if body.init_data:
+        parsed = verify_telegram_init_data(body.init_data)
+        if not parsed:
+            raise HTTPException(status_code=401, detail="Invalid Telegram initData")
+        user = parsed.get("user", {})
+        tg_id = user.get("id")
+        if not tg_id:
+            raise HTTPException(status_code=400, detail="No user in initData")
+        return int(tg_id)
+    if body.admin_id is None:
+        raise HTTPException(status_code=400, detail="admin_id or init_data required")
+    return int(body.admin_id)
 
 
 def _is_admin(admin_id: int) -> bool:
@@ -928,23 +960,26 @@ async def admin_list_withdrawals(admin_id: int, status: str = "pending", limit: 
 
 @api_router.post("/admin/withdrawals/{wid}/approve")
 async def admin_approve_withdrawal(wid: str, body: AdminActionRequest):
-    if not _is_admin(body.admin_id):
+    admin_id = _resolve_admin_id(body)
+    if not _is_admin(admin_id):
         raise HTTPException(status_code=403, detail="Not an admin")
     w = await db.withdrawals.find_one({"id": wid}, {"_id": 0})
     if not w:
         raise HTTPException(status_code=404, detail="Withdrawal not found")
     if w["status"] != "pending":
         raise HTTPException(status_code=400, detail=f"Withdrawal is already {w['status']}")
-    await db.withdrawals.update_one(
+    res = await db.withdrawals.update_one(
         {"id": wid, "status": "pending"},
         {"$set": {
             "status": "approved",
             "decided_at": datetime.now(timezone.utc).isoformat(),
-            "admin_id": body.admin_id,
+            "admin_id": admin_id,
             "admin_note": body.note,
             "tx_hash": body.tx_hash,
         }},
     )
+    if res.modified_count == 0:
+        raise HTTPException(status_code=409, detail="Already decided by another admin")
     if w["wallet"].startswith("tg:"):
         try:
             tg_id = int(w["wallet"].split(":", 1)[1])
@@ -960,27 +995,30 @@ async def admin_approve_withdrawal(wid: str, body: AdminActionRequest):
 
 @api_router.post("/admin/withdrawals/{wid}/reject")
 async def admin_reject_withdrawal(wid: str, body: AdminActionRequest):
-    if not _is_admin(body.admin_id):
+    admin_id = _resolve_admin_id(body)
+    if not _is_admin(admin_id):
         raise HTTPException(status_code=403, detail="Not an admin")
     w = await db.withdrawals.find_one({"id": wid}, {"_id": 0})
     if not w:
         raise HTTPException(status_code=404, detail="Withdrawal not found")
     if w["status"] != "pending":
         raise HTTPException(status_code=400, detail=f"Withdrawal is already {w['status']}")
-    # Refund balance
-    await db.players.update_one(
-        {"wallet": w["wallet"]},
-        {"$inc": {"ton_balance": float(w["amount_ton"])},
-         "$set": {"updated_at": datetime.now(timezone.utc).isoformat()}},
-    )
-    await db.withdrawals.update_one(
+    # Atomically flip status FIRST. Only refund if we won the race (modified_count==1).
+    res = await db.withdrawals.update_one(
         {"id": wid, "status": "pending"},
         {"$set": {
             "status": "rejected",
             "decided_at": datetime.now(timezone.utc).isoformat(),
-            "admin_id": body.admin_id,
+            "admin_id": admin_id,
             "admin_note": body.note,
         }},
+    )
+    if res.modified_count == 0:
+        raise HTTPException(status_code=409, detail="Already decided by another admin")
+    await db.players.update_one(
+        {"wallet": w["wallet"]},
+        {"$inc": {"ton_balance": float(w["amount_ton"])},
+         "$set": {"updated_at": datetime.now(timezone.utc).isoformat()}},
     )
     if w["wallet"].startswith("tg:"):
         try:

@@ -1,68 +1,80 @@
 # Chronicles of TON — Product Requirements
 
 ## Original Problem Statement
-TON-based economy for the Chronicles of TON RPG (FastAPI + React + MongoDB).
+TON-based economy & gameplay for Chronicles of TON (FastAPI + React + MongoDB) inside Telegram Mini App.
 
-**Configuration (production):**
+**Configuration:**
 - Network: TON Mainnet
-- Treasury wallet: `UQCO5ujJsobYdfFjQQ9DGFZThUFXty21_14HkDnPHOMgM79P`
-- Telegram bot token: stored in `/app/backend/.env`
-- Admin Telegram ID (withdrawals + admin panel): `6170049742`
-- User-facing language: Portuguese (pt-BR) + English (en)
+- Treasury: `UQCO5ujJsobYdfFjQQ9DGFZThUFXty21_14HkDnPHOMgM79P`
+- Admin Telegram IDs: `6170049742`
+- Language: Portuguese (pt-BR) + English (en)
 
 **Rules:**
-- Deposits: open for any amount; credited automatically via on-chain poller.
-- Withdrawals: every withdrawal must be manually approved by Admin (Phase 4).
-- Packs:
-  - Starter Pack — 5 TON, one-time, gives +5,000 gold + 1 rare item (`rune_blade`) + 24h XP boost.
-  - XP Pack — 1.5 TON, 2× XP for 7 days. Re-buying extends the timer.
-- VIP — 30 levels, must be bought sequentially. Cumulative benefits: +XP, +Gold drop, +Damage, +Inventory slots, lower market tax (20% → 10% → 8% @ Lv20 → 5% @ Lv30), badge tier (bronze/silver/gold).
-- Market taxes: 20% if no VIP, 10% if VIP ≥ 1 (Phase 3 — not yet wired into market endpoints).
+- Deposits open for any amount, credited automatically by mainnet poller.
+- Withdrawals must be manually approved by Admin.
+- Packs: Starter (5 TON, one-time, +5k gold + rare item + 24h XP) & XP (1.5 TON, 2× XP / 7d, stackable).
+- VIP 1–30 cumulative, with benefits: +XP, +Gold, +DMG, +Slots, market-tax 20%→10%→8%@20→5%@30.
+- Market: server-authoritative item sell prices; tax curve = vip_benefits(level).market_tax_pct.
+- Combat: top-down 2D pixel-art arena, WASD/mouse movement, auto-attack in range, waves with kill counter.
 
 ## Architecture
-- Backend: FastAPI + Motor (MongoDB). Background `_ton_poller_loop` polls TonCenter `getTransactions` every 30s, matches `dep_XXXX` comments, credits `ton_balance`, expires pending deposits older than 1h.
-- Frontend: React 19 + Tailwind + TonConnect UI + zustand store. Webpack polyfills `Buffer` for `@ton/core`.
-- Mongo DB: `chronicles_of_ton` — collections: `players`, `deposits`, `pack_purchases`, `vip_purchases`, `purchases`.
+- Backend: FastAPI + Motor + asyncio TonCenter poller.
+- Frontend: React 19 + Tailwind + TonConnect + zustand + framer-motion. Webpack polyfills `Buffer` for `@ton/core`.
+- Mongo `chronicles_of_ton` collections: players, deposits, pack_purchases, vip_purchases, withdrawals, market_sales, purchases.
 
-## What's Implemented (as of Jun 6, 2026)
+## Implemented (Feb 2026)
+
 ### Phase 1 — Deposits ✅
-- POST `/api/deposit/init` — generates unique `dep_XXXX` comment, returns BoC payload params. Expiry aligned to 3600s.
-- GET `/api/deposit/status/{id}` — returns deposit doc (pending/confirmed/expired).
-- GET `/api/deposits/{wallet}` — paginated history.
-- GET `/api/balance/{wallet}` — `ton_balance`, `vip_level`, `gold`, `xp_pack_active`, `start_pack_purchased`, `vip_benefits`.
-- Background poller credits `ton_balance` once on-chain tx with matching `comment` is detected (≥ amount – 1k nano tolerance).
-- Frontend: `WalletPanel` shows in-game balance + Deposit button; `DepositDialog` builds BoC payload via `@ton/core`, polls status every 10s.
+- `/api/deposit/init`, `/api/deposit/status/{id}`, `/api/deposits/{wallet}`, `/api/balance/{wallet}` + mainnet poller.
 
 ### Phase 2 — Packs & VIP ✅
-- GET `/api/pack/catalog`, POST `/api/pack/buy` (start/xp).
-- GET `/api/vip/catalog`, POST `/api/vip/buy` (cumulative).
-- **Atomic conditional updates** prevent race-double-debit.
-- Audit logs to `pack_purchases` and `vip_purchases`.
-- Frontend: `EconomyShop.jsx` (Packs + VIP tabs) integrated into `GamePanel` as a new tab.
+- `/api/pack/catalog|buy`, `/api/vip/catalog|buy` with atomic conditional debits + audit logs.
+
+### Phase 3 — Market Taxes ✅
+- `POST /api/market/sell` removes item from inventory and credits gold using SERVER-SIDE `ITEM_SELL_VALUES` (anti gold-mint). Tax pct from `vip_benefits(level)`.
+
+### Phase 4 — Withdrawals + Admin ✅
+- `POST /api/withdraw/request` atomically debits ton_balance and stores pending row.
+- `GET /api/withdrawals/{wallet}` history.
+- `GET /api/admin/check/{id}` introspection.
+- `GET /api/admin/withdrawals?admin_id&status` list (admin gated).
+- `POST /api/admin/withdrawals/{wid}/approve|reject` with `_resolve_admin_id(body)` — prefers signed Telegram `init_data`, falls back to `admin_id` for dev. Reject flips status atomically BEFORE refund (no double-refund race).
+- Hidden `AdminPanel` tab in `GamePanel` shown only when `/api/admin/check/{tgId}` returns true.
+
+### Visual / UX ✅
+- `BattleArena` = pixel-art top-down forest map (`ForestMap.jsx` — grass + trees + bushes + rocks + mushrooms + flowers).
+- 2D SVG hero (`PixelHero`) with walk frames + facing direction + idle/attack/cast/victory states.
+- 2D SVG monster sprites (`MonsterSprite`) per type: wolf, goblin, skeleton, orc, wraith, troll, lich, dragon.
+- Kill counter (X/Y kills) in arena top-right (Pixlands-style).
+- VIP/XP-pack buffs surfaced in combat: `gameStore.computeDerived` applies `damage_bonus_pct`, `gold_drop_bonus_pct`, `xp_gain_bonus_pct` and 2× XP pack multiplier. `EconomyShop` calls `setEconomyBuffs()` on every balance refresh.
 
 ### Tests
-- `/app/backend/tests/test_ton_economy_phase12.py` — 20 tests, all passing (iteration_4.json).
+- `/app/backend/tests/test_ton_economy_phase12.py` — 20/20 passing.
+- `/app/backend/tests/test_ton_economy_phase34.py` — 21/21 passing.
 
 ## Backlog
-### P0 — Next
-- **Phase 3 — Market Taxes**: apply 10%/20% tax in market sell endpoint (needs review of existing market routes).
-- **Phase 4 — Withdrawals**: `POST /api/withdraw/request`, admin approve/reject endpoints (Telegram ID gate).
-- **Phase 4.1 — Hidden Admin Panel**: React route revealed only for Telegram ID 6170049742 to list & action pending withdrawals.
+### P0
+- Require Telegram `initData` on `/api/withdraw/request`, `/api/market/sell`, `/api/withdrawals/{wallet}` (anti wallet-spoof). Mirror the `_resolve_admin_id` pattern with a generic `_resolve_user_id(body, allow_legacy_wallet=False)` helper.
+- Validate `to_address` checksum on withdrawals (avoid lost funds on typos).
+- Dungeons: separate biomes (cave/desert/volcano) as new routes/maps.
 
 ### P1
-- Refactor `start_pack_purchased` to per-pack `purchased_packs: List[str]` to support future one-time packs.
-- Add Mongo indexes: `pack_purchases (wallet, created_at)`, `vip_purchases (wallet, created_at)`, `deposits (wallet, created_at)`, `deposits (comment)`.
-- Require Telegram `initData` (or session token) on pack/vip/withdraw endpoints for spoofing protection.
-- VIP row layout polish (cramped on ≤1280px).
+- Per-pack `purchased_packs: List[str]` instead of single `start_pack_purchased` flag.
+- Mongo indexes: pack_purchases/vip_purchases/withdrawals/market_sales on (wallet, created_at), deposits on (comment) unique.
+- Expose `window.useGame` in dev for E2E testability of admin/withdraw flows.
+- Frontend: send `init_data` to admin endpoints when running inside Telegram.
 
 ### P2
-- Localized number formatting (pt-BR uses `.` for thousands, `,` for decimals).
-- Pack/VIP purchase notifications via Telegram already wired but best-effort; harden retry.
-- Surface XP pack/VIP buffs in combat formulas (current store ignores `xp_pack_active` & `vip_benefits.xp_gain_bonus_pct`).
+- Bottom-bar nav (Pixlands-style) instead of top-right tabs.
+- Hire pixel-art artist or replace SVG sprites with proper sprite sheets.
+- Boss spawn cinematics every 10 waves with guaranteed epic drop.
 
 ## Files of Reference
 - `/app/backend/server.py` — all endpoints + poller.
-- `/app/frontend/src/components/game/EconomyShop.jsx` — Phase 2 UI.
-- `/app/frontend/src/components/wallet/DepositDialog.jsx` — Phase 1 UI.
-- `/app/frontend/src/lib/api.js`, `ton.js`.
+- `/app/frontend/src/components/game/BattleArena.jsx` — combat scene.
+- `/app/frontend/src/components/game/PixelSprites.jsx` — 2D pixel sprites.
+- `/app/frontend/src/components/game/ForestMap.jsx` — forest tilemap.
+- `/app/frontend/src/components/game/AdminPanel.jsx` — hidden admin tab.
+- `/app/frontend/src/components/wallet/WithdrawDialog.jsx`.
+- `/app/frontend/src/store/gameStore.js` — VIP/XP buff calculus.
 - `/app/memory/test_credentials.md` — testing notes.
