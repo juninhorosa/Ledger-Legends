@@ -49,26 +49,23 @@ Build a browser-based incremental RPG with TON blockchain economy. World of Warc
 - ✅ Talent tree with 9 nodes & prerequisites
 - ✅ Season pass with 20 tiers
 
-## Iteration 2 (Telegram + Animations)
-- ✅ Telegram Bot integration (token configured in .env)
-- ✅ Webhook + Mini App menu button + `/start` `/help` commands set
-- ✅ `/api/telegram/auth` validates HMAC-SHA256 initData → auto-creates/loads player
-- ✅ `/api/telegram/notify` proxies to Bot API sendMessage
-- ✅ Frontend auto-detects Telegram WebApp env, auto-logs user (no wallet required in TG)
-- ✅ Framer Motion animated hero (idle/attack/cast/victory states)
-- ✅ Framer Motion animated monster (idle float, hit shake, death fade, boss glow)
-- ✅ 3 active skills with cooldowns: Power Strike (3× dmg, 8s), Fireball (5× dmg, 15s), Holy Light (skip + gold, 20s)
-- ✅ Inline Lottie VFX for fire/slash/heal effects
-- ✅ Haptic feedback in Telegram via HapticFeedback API
-- ✅ 26/26 backend tests passing including HMAC validation
+## Iteration 3 (Battle Arena + Security)
+- ✅ **Battle Arena interativa**: Hero movimenta com cursor do mouse OU teclas WASD/setas; monstro com IA simples que persegue o herói; ataque automático quando em range
+- ✅ Indicador visual de range (círculo brilhante ao redor do herói)
+- ✅ Sprites de monstros em emoji (🐺 🧌 💀 👹 🐲 etc.) — mais legíveis no formato compacto
+- ✅ Modo `?guest=1` para preview/demo sem carteira
+- ✅ **Segurança P1**: validação de `auth_date` (<24h) no initData (proteção contra replay)
+- ✅ **Segurança P1**: `/api/telegram/notify` agora exige initData válido — chat_id derivado do usuário verificado (não pode mais spammar chats arbitrários)
+- ✅ 34/34 testes backend passando (12 + 12 + 10 novos)
 
 ## Backlog / Next Tasks
 - P1: Server-side payment verification (TON Center polling treasury wallet)
 - P1: USDT Jetton transfer implementation
-- P1: Auth-gate /api/telegram/notify (anyone can spam any chat_id today)
-- P1: Add auth_date freshness check to initData verification (<24h)
+- P1: Sistema de referral via `/start ref_<userId>`
+- P2: Múltiplos monstros simultâneos na arena (estilo Vampire Survivors)
+- P2: Animações de skill em sprite sheets pixel-art (estilo Pixlands)
 - P2: Leaderboard UI
 - P2: PvP arena & guilds
 - P2: Sound effects & background music
-- P2: Replace inline Lottie VFX with high-quality animations from LottieFiles
+- P2: Substituir Lottie VFX inline por animações premium do LottieFiles
 - P2: Migrate webhook secret to X-Telegram-Bot-Api-Secret-Token header
