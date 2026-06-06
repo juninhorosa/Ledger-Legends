@@ -198,7 +198,11 @@ export const useGame = create((set, get) => ({
     classId: class_id || null,
     classBonuses: class_bonuses || null,
   }),
-  setClassId: (id) => set({ classId: id }),
+  setClassId: (id) => {
+    if (id) localStorage.setItem("chronicles_classId", id);
+    else localStorage.removeItem("chronicles_classId");
+    set({ classId: id });
+  },
 
   hydrateFromServer: (data) => {
     const monsters = spawnWaveMonsters(data.wave || 1);
@@ -218,7 +222,7 @@ export const useGame = create((set, get) => ({
       talentPoints: data.talent_points || 0,
       seasonXp: data.season_xp || 0,
       seasonClaimed: data.season_claimed || [],
-      classId: data.class_id || null,
+      classId: data.class_id || localStorage.getItem("chronicles_classId") || null,
       monsters,
     });
   },
@@ -462,6 +466,8 @@ export const useGame = create((set, get) => ({
         season_claimed: s.seasonClaimed,
         battle_meter: computeDerived(s).bm,
       });
+    } catch (e) {
+      console.warn("[chronicles] save failed (offline?):", e?.message);
     } finally {
       set({ saving: false });
     }

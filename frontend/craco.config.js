@@ -124,6 +124,23 @@ if (isDevServer) {
       throw err;
     }
   }
+
+  // Re-apply proxy AFTER withVisualEdits (it overwrites devServer and drops our proxy)
+  const prevDevServer = webpackConfig.devServer;
+  webpackConfig.devServer = (devServerConfig, ...rest) => {
+    const cfg = typeof prevDevServer === "function"
+      ? prevDevServer(devServerConfig, ...rest)
+      : devServerConfig;
+    cfg.proxy = [
+      {
+        context: ["/api"],
+        target: "http://localhost:8000",
+        changeOrigin: true,
+        secure: false,
+      },
+    ];
+    return cfg;
+  };
 }
 
 module.exports = webpackConfig;
