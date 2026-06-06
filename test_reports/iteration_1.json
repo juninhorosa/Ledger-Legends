@@ -1,0 +1,45 @@
+{
+  "summary": "Backend-only testing of Chronicles of TON API. All 12 pytest tests passed (100% success). Covered root endpoint, player create-on-first-call with defaults, get-returns-same-player idempotency, partial save persistence, save-creates-if-missing, purchase append to inventory, purchase wallet-mismatch (400), multiple purchases ordering, leaderboard desc sorting + 20-cap, and /api prefix routing. MongoDB persistence verified via Create -> GET pattern.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/leaderboard", "issue": "No pagination/offset support; hard-capped at 20. Acceptable per spec but worth noting for future."},
+      {"endpoint": "/api/player/{wallet}/save", "issue": "Endpoint upserts a player even if it never existed (test_save_creates_player_if_not_exists). This is the current behavior and matches code, but may allow client to create players bypassing GET. Confirm intent."},
+      {"endpoint": "/api/player/{wallet}/purchase", "issue": "No validation of currency enum (TON/USDT/GOLD) or amount > 0; accepts any string/float. Also does not deduct gold for GOLD purchases."},
+      {"endpoint": "/api/player/{wallet}/purchase", "issue": "Uses upsert=True on inventory push — purchasing for a non-existent player silently creates a partial document with only wallet+inventory+updated_at (missing defaults). Consider requiring player exists or running full default init."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_chronicles_ton_api.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Consider adding Pydantic validators for PurchaseRequest.currency (Literal['TON','USDT','GOLD']) and amount > 0",
+    "Consider whether /save and /purchase should 404 for unknown wallets instead of upserting partial player documents",
+    "Optionally deduct gold balance when currency == 'GOLD' on purchase"
+  ],
+  "critical_code_review_comments": [
+    "server.py @app.on_event('shutdown') uses deprecated FastAPI event hook — migrate to lifespan context manager",
+    "PurchaseRequest lacks currency enum and amount validation; currently accepts arbitrary strings/negatives",
+    "/save endpoint will upsert player from scratch if missing — possibly unintended; defaults applied via Player(wallet=...).model_dump() but only when no doc exists, behavior is fine but undocumented",
+    "Leaderboard projection looks good (_id excluded). All Mongo reads correctly exclude _id.",
+    "CORS allow_origins='*' with allow_credentials=True is invalid per CORS spec — browsers will block credentialed requests. If credentials not needed, set allow_credentials=False.",
+    "No index on players.wallet — recommend unique index for lookup performance and to enforce uniqueness",
+    "No index on players.battle_meter for leaderboard sort; acceptable at small scale"
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_chronicles_ton_api.py"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "skipped"},
+  "test_credentials": "None required — wallet addresses are arbitrary strings (used TEST_wallet_<uuid> prefix)",
+  "seed_data_creation": "Tests create TEST_-prefixed wallets in players and purchases collections; not cleaned up (low impact, easily identified)",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "12 pytest tests in /app/backend/tests/test_chronicles_ton_api.py via REACT_APP_BACKEND_URL/api. All endpoints validated through public ingress. Frontend testing skipped per request (TonConnect requires real wallet). Future iterations can extend with: currency validation tests, gold-deduction tests, and unique-wallet-index test once enforced.",
+  "rca of the issue": "N/A — all tests pass. One initial test assertion was too strict for Equipment partial update (expected fields to remain absent, but Pydantic Equipment model correctly fills with None defaults). Test was adjusted to compare only provided keys."
+}
