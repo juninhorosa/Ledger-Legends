@@ -1,74 +1,39 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useGame } from "../../store/gameStore";
 import { useI18n } from "../../i18n/I18nContext";
-import { MONSTER_SPRITES } from "../../game/items";
-import { Sword, Pause, Play, Skull } from "lucide-react";
-import AnimatedMonster from "./AnimatedMonster";
-import AnimatedHero from "./AnimatedHero";
+import { Pause, Play, Sword } from "lucide-react";
+import BattleArena from "./BattleArena";
 import SkillsBar from "./SkillsBar";
-import SkillEffect from "./SkillEffect";
 import { hapticImpact } from "../../lib/telegram";
 
 export default function CombatScreen() {
   const { t, lang } = useI18n();
   const state = useGame();
-  const [hitFx, setHitFx] = useState(false);
-  const [dying, setDying] = useState(false);
-  const intervalRef = useRef(null);
-  const prevWaveRef = useRef(state.wave);
+  const d = state.derived();
 
   useEffect(() => {
     if (!state.monster) state.initRun();
   }, []);
 
-  // Trigger death anim on wave change
-  useEffect(() => {
-    if (prevWaveRef.current !== state.wave) {
-      setDying(true);
-      setTimeout(() => setDying(false), 400);
-      prevWaveRef.current = state.wave;
-    }
-  }, [state.wave]);
-
-  // Auto-attack loop
-  useEffect(() => {
-    if (intervalRef.current) clearInterval(intervalRef.current);
-    if (state.autoAttack) {
-      const aspd = state.derived().aspd;
-      const period = Math.max(250, Math.floor(1000 / aspd));
-      intervalRef.current = setInterval(() => {
-        useGame.getState().attack();
-        setHitFx(true);
-        setTimeout(() => setHitFx(false), 250);
-      }, period);
-    }
-    return () => intervalRef.current && clearInterval(intervalRef.current);
-  }, [state.autoAttack, state.derived().aspd]);
-
-  const handleAttack = () => {
+  const handleManualAttack = () => {
     state.attack();
     hapticImpact("light");
-    setHitFx(true);
-    setTimeout(() => setHitFx(false), 250);
   };
 
   if (!state.monster) return null;
-  const sprite = MONSTER_SPRITES[state.monster.sprite] || MONSTER_SPRITES.orc;
   const hpPct = (state.monsterHp / state.monster.hp) * 100;
-  const d = state.derived();
 
   return (
-    <div data-testid="combat-screen" className="game-panel p-6 flex flex-col gap-4 min-h-[500px]">
+    <div data-testid="combat-screen" className="game-panel p-6 flex flex-col gap-4 min-h-[560px]">
       <div className="flex justify-between items-center">
         <div>
           <div className="text-xs uppercase tracking-widest text-slate-400">{t("wave")}</div>
           <div className="font-heading text-3xl text-amber-300" data-testid="wave-counter">{state.wave}</div>
         </div>
-        {state.monster.isBoss && (
-          <div className="px-4 py-1 rounded font-heading text-red-300 border border-red-500 bg-red-950/40 tracking-widest text-sm animate-pulse" data-testid="boss-indicator">
-            <Skull className="inline" size={14} /> {t("bossWave")}
-          </div>
-        )}
+        <div className="text-center">
+          <div className="text-xs uppercase tracking-widest text-slate-400">{t("dps")}</div>
+          <div className="font-mono-num text-xl text-amber-200">{d.dps}</div>
+        </div>
         <button
           data-testid="auto-attack-toggle"
           onClick={() => state.toggleAuto()}
@@ -79,48 +44,9 @@ export default function CombatScreen() {
         </button>
       </div>
 
-      {/* Arena */}
-      <div className="relative flex-1 flex items-center justify-between bg-black/40 border-2 border-slate-700 rounded-md overflow-hidden min-h-[320px] px-6"
-        style={{ backgroundImage: "radial-gradient(ellipse at center, rgba(217,119,6,0.15), transparent 70%)" }}>
+      <BattleArena />
 
-        {/* Hero on the left */}
-        <div className="z-10">
-          <AnimatedHero state={state.heroState} size={110} />
-        </div>
-
-        {/* Monster on the right */}
-        <div className="z-10">
-          <AnimatedMonster
-            src={sprite}
-            alt={state.monster.name[lang]}
-            hitFx={hitFx}
-            dying={dying}
-            isBoss={state.monster.isBoss}
-          />
-        </div>
-
-        {/* Skill effect overlay (centered) */}
-        {state.activeEffect && (
-          <SkillEffect
-            key={state.activeEffect.id}
-            effect={state.activeEffect.effect}
-            onComplete={() => useGame.getState().clearEffect()}
-          />
-        )}
-
-        {/* Floating damage numbers */}
-        {state.damageNumbers.map((dn) => (
-          <span
-            key={dn.id}
-            className={`damage-number ${dn.crit ? "crit" : ""}`}
-            style={{ left: `${dn.x}%`, top: `${dn.y}%` }}
-          >
-            {dn.crit ? "CRIT! " : ""}{dn.value}
-          </span>
-        ))}
-      </div>
-
-      {/* Monster info */}
+      {/* Monster HP bar */}
       <div className="space-y-1">
         <div className="flex justify-between font-heading text-amber-200">
           <span data-testid="monster-name">{state.monster.name[lang]}</span>
@@ -134,16 +60,13 @@ export default function CombatScreen() {
       {/* Skills */}
       <SkillsBar />
 
-      <div className="flex justify-between items-center gap-2">
-        <div className="text-xs text-slate-400 font-mono-num">
-          {t("dps")}: <span className="text-amber-200">{d.dps}</span>
-        </div>
+      <div className="flex justify-end">
         <button
           data-testid="combat-attack-button"
-          onClick={handleAttack}
-          className="btn-epic flex items-center gap-2 text-base"
+          onClick={handleManualAttack}
+          className="btn-epic flex items-center gap-2 text-sm"
         >
-          <Sword size={18} /> {t("attack")}
+          <Sword size={16} /> {t("attack")}
         </button>
       </div>
     </div>

@@ -1,0 +1,35 @@
+{
+  "summary": "Iteration 3 backend testing for Chronicles of TON. Verified two P1 security fixes: (1) verify_telegram_init_data now rejects initData with auth_date older than 86400s, and (2) /api/telegram/notify changed signature from {telegram_id,text} to {init_data,text,parse_mode?} with chat_id derived server-side from the verified user. Extended /app/backend/tests/test_telegram_integration.py with 10 new tests covering freshness boundary cases, stale rejection (auth + notify), new notify signature validation (missing/empty/invalid initData → 401/422), valid-initData proxy flow, and explicit assertion that the OLD notify signature now returns 422. All 12 iter-1 API tests still pass. Total 34 passed, 1 skipped (telegram/setup intentionally skipped to avoid mutating the live webhook; set RUN_TELEGRAM_SETUP=1 to execute).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/telegram/notify", "issue": "parse_mode is forwarded raw to Bot API without enum validation. Invalid values (e.g. 'Markdown2') yield an unhelpful Bot API error string instead of a clean 422 from our backend. Low priority."},
+      {"endpoint": "/api/telegram/webhook/{secret}", "issue": "Secret remains in URL path. Telegram recommends X-Telegram-Bot-Api-Secret-Token header via setWebhook secret_token. Carried over from iter-2, unchanged."},
+      {"endpoint": "verify_telegram_init_data", "issue": "Freshness check uses a single max_age_sec (86400). Consider a tighter window (e.g. 3600s) for /telegram/notify since stale notify calls have no legitimate use, while /auth may tolerate 24h."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_telegram_integration.py",
+    "/app/backend/tests/test_chronicles_ton_api.py",
+    "/app/test_reports/pytest/pytest_results_iter3.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Freshness check correctly placed inside verify_telegram_init_data so it applies to BOTH /telegram/auth and /telegram/notify — single source of truth.",
+    "/telegram/notify now derives chat_id from parsed user.id, so a malicious caller cannot spam arbitrary Telegram users — P1 fix is solid.",
+    "NotifyRequest.parse_mode defaults to 'HTML' which matches the rest of the codebase (_tg_send also uses HTML); consider a Literal['HTML','Markdown','MarkdownV2'] for stricter validation.",
+    "TELEGRAM_BOT_TOKEN is read at import time; if missing, verify_telegram_init_data returns None → all auth attempts fail closed. Good.",
+    "Battle arena code referenced in the iteration note lives in the frontend; no backend surface area changed there. Backend-only test scope respected."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_telegram_integration.py (extended with 10 iter-3 tests; _build_signed_init_data now accepts auth_date param)"
+  ],
+  "success_rate": {"backend": "100% (34/34 executed tests passed, 1 intentionally skipped)", "frontend": "N/A (skipped per request)"},
+  "test_credentials": "TELEGRAM_BOT_TOKEN and TELEGRAM_WEBHOOK_SECRET sourced from /app/backend/.env. Webhook secret 'chronicles-ton-webhook-secret-2026' verified.",
+  "seed_data_creation": "Ephemeral players with wallet tg:<rand_telegram_id> created during signed-initData tests. Each test uses a unique id (800M/850M/900M + time%100k) to avoid cross-test collisions. No production seed data touched.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter-3 P1 security fixes are validated end-to-end. The signed-initData helper _build_signed_init_data(bot_token, user, auth_date=None) now accepts a custom auth_date so freshness / replay scenarios can be exercised with the same HMAC code path the server uses. To test future changes to /telegram/notify, use the helper to generate a fresh init_data and POST {init_data, text, parse_mode?}.",
+  "rca of the issue": "N/A — no bug found this iteration. The two P1 fixes from iter-2 action items (stale-initData replay & notify chat_id spoofing) are correctly implemented and covered by tests."
+}

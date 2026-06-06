@@ -52,14 +52,14 @@ export const MONSTERS = [
 ];
 
 export const MONSTER_SPRITES = {
-  wolf: "https://images.unsplash.com/photo-1564466809058-bf4114d55352?w=600&q=70",
-  goblin: "https://images.unsplash.com/photo-1568223953582-1d0698f0e734?w=600&q=70",
-  skeleton: "https://images.unsplash.com/photo-1635399860495-2a2802a6df50?w=600&q=70",
-  orc: "https://images.unsplash.com/photo-1568223953582-1d0698f0e734?w=600&q=70",
-  wraith: "https://images.unsplash.com/photo-1635399860495-2a2802a6df50?w=600&q=70",
-  troll: "https://images.unsplash.com/photo-1572883454114-1cf0031ede2a?w=600&q=70",
-  lich: "https://images.unsplash.com/photo-1635399860495-2a2802a6df50?w=600&q=70",
-  dragon: "https://images.unsplash.com/photo-1547036967-23d11aacaee0?w=600&q=70",
+  wolf: "🐺",
+  goblin: "👺",
+  skeleton: "💀",
+  orc: "👹",
+  wraith: "👻",
+  troll: "🧌",
+  lich: "☠️",
+  dragon: "🐲",
 };
 
 export function getMonsterForWave(wave) {

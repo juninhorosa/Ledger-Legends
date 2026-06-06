@@ -151,8 +151,8 @@ async def leaderboard():
 
 
 # ---------- Telegram Mini App Integration ----------
-def verify_telegram_init_data(init_data: str) -> Optional[dict]:
-    """Validate Telegram WebApp initData using HMAC-SHA256.
+def verify_telegram_init_data(init_data: str, max_age_sec: int = 86400) -> Optional[dict]:
+    """Validate Telegram WebApp initData using HMAC-SHA256 and check auth_date freshness.
     Returns parsed user dict if valid, None otherwise."""
     if not TELEGRAM_BOT_TOKEN or not init_data:
         return None
@@ -166,6 +166,15 @@ def verify_telegram_init_data(init_data: str) -> Optional[dict]:
         computed_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
         if not hmac.compare_digest(computed_hash, received_hash):
             return None
+        # Freshness check (replay protection)
+        auth_date = parsed.get("auth_date")
+        if auth_date:
+            try:
+                age = int(datetime.now(timezone.utc).timestamp()) - int(auth_date)
+                if age > max_age_sec:
+                    return None
+            except (TypeError, ValueError):
+                return None
         user_raw = parsed.get("user")
         if user_raw:
             parsed["user"] = json.loads(user_raw)
@@ -207,17 +216,26 @@ async def telegram_auth(body: TelegramAuthRequest):
 
 
 class NotifyRequest(BaseModel):
-    telegram_id: int
+    init_data: str  # caller must prove they are a valid Telegram user
     text: str
     parse_mode: Optional[str] = "HTML"
 
 @api_router.post("/telegram/notify")
 async def telegram_notify(body: NotifyRequest):
+    """Send a notification to the caller's own Telegram chat.
+    The caller must include a valid initData; we only send to that verified user's chat_id."""
     if not TELEGRAM_BOT_TOKEN:
         raise HTTPException(status_code=500, detail="Bot token not configured")
+    parsed = verify_telegram_init_data(body.init_data)
+    if not parsed:
+        raise HTTPException(status_code=401, detail="Invalid Telegram initData")
+    user = parsed.get("user", {})
+    tg_id = user.get("id")
+    if not tg_id:
+        raise HTTPException(status_code=400, detail="No user in initData")
     async with httpx.AsyncClient(timeout=10.0) as cx:
         r = await cx.post(f"{TG_API}/sendMessage", json={
-            "chat_id": body.telegram_id,
+            "chat_id": tg_id,
             "text": body.text,
             "parse_mode": body.parse_mode,
         })

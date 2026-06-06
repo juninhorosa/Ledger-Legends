@@ -52,6 +52,16 @@ export default function GamePanel() {
           setLoaded(true);
         }
       })();
+      return;
+    }
+    // Dev / preview mode: ?guest=1 enables play without wallet
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("guest") === "1") {
+      setTgMode(true);
+      setTgUser({ first_name: "Guest", username: "guest" });
+      game.setWallet("guest:local");
+      game.initRun();
+      setLoaded(true);
     }
   }, []);
 

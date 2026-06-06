@@ -57,11 +57,14 @@ def session():
     return s
 
 
-def _build_signed_init_data(bot_token: str, user: dict) -> str:
-    """Construct a properly HMAC-SHA256 signed Telegram initData string."""
-    auth_date = str(int(time.time()))
+def _build_signed_init_data(bot_token: str, user: dict, auth_date: int | None = None) -> str:
+    """Construct a properly HMAC-SHA256 signed Telegram initData string.
+
+    auth_date: optional unix-seconds to use for the auth_date field; defaults to now().
+    """
+    auth_date_str = str(int(auth_date) if auth_date is not None else int(time.time()))
     fields = {
-        "auth_date": auth_date,
+        "auth_date": auth_date_str,
         "query_id": f"AAH{uuid.uuid4().hex[:10]}",
         "user": json.dumps(user, separators=(",", ":")),
     }
@@ -123,20 +126,101 @@ class TestTelegramAuth:
         r = session.post(f"{API}/telegram/auth", json={"init_data": tampered})
         assert r.status_code == 401
 
+    # --- Iteration 3: freshness (replay-protection) check ---
+    @pytest.mark.skipif(not BOT_TOKEN, reason="Bot token unavailable")
+    def test_auth_with_stale_auth_date_returns_401(self, session):
+        """initData with valid HMAC but auth_date older than 86400s (24h) must be rejected."""
+        stale_ts = int(time.time()) - (86400 + 600)  # 24h + 10min ago
+        user = {"id": 700000001, "first_name": "Stale"}
+        init_data = _build_signed_init_data(BOT_TOKEN, user, auth_date=stale_ts)
+        r = session.post(f"{API}/telegram/auth", json={"init_data": init_data})
+        assert r.status_code == 401, r.text
+        assert "Invalid" in r.text
+
+    @pytest.mark.skipif(not BOT_TOKEN, reason="Bot token unavailable")
+    def test_auth_with_fresh_auth_date_succeeds(self, session):
+        """initData with valid HMAC AND auth_date within 24h must succeed."""
+        fresh_ts = int(time.time()) - 60  # 1 min ago — clearly fresh
+        tg_id = 800000000 + int(time.time()) % 100000
+        user = {"id": tg_id, "first_name": "Fresh", "username": "fresh_user"}
+        init_data = _build_signed_init_data(BOT_TOKEN, user, auth_date=fresh_ts)
+        r = session.post(f"{API}/telegram/auth", json={"init_data": init_data})
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert data["telegram_id"] == tg_id
+        assert data["wallet"] == f"tg:{tg_id}"
+        assert "player" in data and data["player"]["wallet"] == f"tg:{tg_id}"
+
+    @pytest.mark.skipif(not BOT_TOKEN, reason="Bot token unavailable")
+    def test_auth_boundary_just_inside_24h_succeeds(self, session):
+        """auth_date just under 24h old should still be accepted."""
+        ts = int(time.time()) - (86400 - 600)  # 23h50m ago
+        tg_id = 850000000 + int(time.time()) % 100000
+        user = {"id": tg_id, "first_name": "Edge"}
+        init_data = _build_signed_init_data(BOT_TOKEN, user, auth_date=ts)
+        r = session.post(f"{API}/telegram/auth", json={"init_data": init_data})
+        assert r.status_code == 200, r.text
+
 
 # ---------------------------------------------------------------------------
-# /api/telegram/notify
+# /api/telegram/notify   (iteration 3: signature changed)
+#   New body: {init_data: str, text: str, parse_mode?: str}
+#   chat_id is derived server-side from the verified user.id (no spoofing).
 # ---------------------------------------------------------------------------
 class TestTelegramNotify:
-    def test_notify_forwards_to_bot_api(self, session):
-        # Fake chat_id => Telegram API returns ok=false with description; we just
-        # verify the proxy returns the Telegram JSON shape (200 from our backend).
+    def test_notify_old_signature_telegram_id_field_returns_422(self, session):
+        """Old payload {telegram_id, text} must now FAIL validation since
+        `telegram_id` was removed and `init_data` is required."""
         r = session.post(f"{API}/telegram/notify",
-                         json={"telegram_id": 1, "text": "hello from test"})
+                         json={"telegram_id": 1, "text": "hello from old client"})
+        assert r.status_code == 422, r.text
+        body = r.json()
+        # FastAPI validation envelope
+        assert "detail" in body
+        # The missing required field should be init_data
+        detail_str = json.dumps(body["detail"])
+        assert "init_data" in detail_str
+
+    def test_notify_missing_init_data_returns_422(self, session):
+        r = session.post(f"{API}/telegram/notify", json={"text": "hi"})
+        assert r.status_code == 422, r.text
+
+    def test_notify_invalid_init_data_returns_401(self, session):
+        r = session.post(f"{API}/telegram/notify",
+                         json={"init_data": "user=%7B%22id%22%3A42%7D&hash=deadbeef",
+                               "text": "spam attempt"})
+        assert r.status_code == 401, r.text
+        assert "Invalid" in r.text
+
+    def test_notify_empty_init_data_returns_401(self, session):
+        r = session.post(f"{API}/telegram/notify",
+                         json={"init_data": "", "text": "spam attempt"})
+        assert r.status_code == 401, r.text
+
+    @pytest.mark.skipif(not BOT_TOKEN, reason="Bot token unavailable")
+    def test_notify_with_stale_init_data_returns_401(self, session):
+        """Stale (>24h) initData must also be rejected by notify endpoint."""
+        stale_ts = int(time.time()) - (86400 + 600)
+        user = {"id": 42, "first_name": "Stale"}
+        init_data = _build_signed_init_data(BOT_TOKEN, user, auth_date=stale_ts)
+        r = session.post(f"{API}/telegram/notify",
+                         json={"init_data": init_data, "text": "ping"})
+        assert r.status_code == 401, r.text
+
+    @pytest.mark.skipif(not BOT_TOKEN, reason="Bot token unavailable")
+    def test_notify_with_valid_init_data_forwards_to_bot_api(self, session):
+        """With a valid signed initData, the proxy should call Bot API sendMessage
+        using the verified user's id as chat_id (not an arbitrary one).
+        We use a fake user id so Bot API returns ok=false but the envelope must
+        come through with status 200 from our backend."""
+        user = {"id": 1, "first_name": "Notify"}  # id=1 is unreachable → ok:false
+        init_data = _build_signed_init_data(BOT_TOKEN, user)
+        r = session.post(f"{API}/telegram/notify",
+                         json={"init_data": init_data, "text": "hello from test",
+                               "parse_mode": "HTML"})
         assert r.status_code == 200, r.text
         data = r.json()
         assert "ok" in data, f"Expected Telegram API envelope, got: {data}"
-        # With a fake chat_id, ok should be False and description populated
         if data.get("ok") is False:
             assert "description" in data or "error_code" in data
 
