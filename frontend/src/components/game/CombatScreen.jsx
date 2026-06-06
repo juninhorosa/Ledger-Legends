@@ -28,7 +28,7 @@ export default function CombatScreen() {
   const headerName = primary ? primary.name[lang] : "";
 
   return (
-    <div data-testid="combat-screen" className="game-panel p-6 flex flex-col gap-4 min-h-[560px]">
+    <div data-testid="combat-screen" className="game-panel p-6 flex flex-col gap-4 min-h-[720px]">
       <div className="flex justify-between items-center">
         <div>
           <div className="text-xs uppercase tracking-widest text-slate-400">{t("wave")}</div>

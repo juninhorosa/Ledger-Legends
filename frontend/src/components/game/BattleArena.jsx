@@ -6,6 +6,7 @@ import { useI18n } from "../../i18n/I18nContext";
 import { hapticImpact } from "../../lib/telegram";
 import { Skull } from "lucide-react";
 import SkillEffect from "./SkillEffect";
+import ForestMap from "./ForestMap";
 
 const HERO_AVATAR = "https://images.unsplash.com/photo-1773216344064-e1231ff27d09?w=400&q=70";
 const HERO_RADIUS = 36;
@@ -212,13 +213,11 @@ export default function BattleArena() {
       data-testid="battle-arena"
       onMouseMove={handlePointerMove}
       onTouchMove={handlePointerMove}
-      className="relative flex-1 bg-black/40 border-2 border-slate-700 rounded-md overflow-hidden min-h-[360px] cursor-crosshair select-none"
-      style={{
-        backgroundImage: `radial-gradient(ellipse at center, rgba(217,119,6,0.12), transparent 70%),
-          repeating-linear-gradient(0deg, rgba(255,255,255,0.025) 0 1px, transparent 1px 40px),
-          repeating-linear-gradient(90deg, rgba(255,255,255,0.025) 0 1px, transparent 1px 40px)`,
-      }}
+      className="relative flex-1 border-2 border-emerald-900/70 rounded-md overflow-hidden min-h-[520px] cursor-crosshair select-none shadow-[inset_0_0_40px_rgba(0,0,0,0.5)]"
     >
+      {/* Pixel-art forest tilemap background */}
+      <ForestMap seed={7} count={26} />
+
       {/* Wave indicators */}
       <div className="absolute top-2 left-2 z-20 flex items-center gap-2">
         {isBossWave && (
@@ -231,6 +230,14 @@ export default function BattleArena() {
             ⚔ HORDE × {aliveMonsters.length}
           </div>
         )}
+      </div>
+
+      {/* Kill counter (Pixlands-style) */}
+      <div
+        data-testid="kill-counter"
+        className="absolute top-2 right-2 z-20 px-3 py-1 rounded font-mono-num text-xs bg-black/65 border border-amber-700/60 text-amber-200 tracking-wide"
+      >
+        {monsters.length - aliveMonsters.length}/{monsters.length} kills
       </div>
 
       {/* Range indicator */}
@@ -280,6 +287,7 @@ export default function BattleArena() {
             draggable={false}
             className="w-full h-full object-cover rounded-full border-4 border-amber-700"
             style={{
+              imageRendering: "pixelated",
               boxShadow: heroState === "cast"
                 ? "0 0 30px rgba(6,182,212,0.95), inset 0 0 16px rgba(6,182,212,0.4)"
                 : heroState === "victory"
@@ -328,7 +336,7 @@ export default function BattleArena() {
               animate={isHit ? { x: [0, -5, 5, 0], scale: [1, 1.12, 1] } : { y: [0, -3, 0] }}
               transition={isHit ? { duration: 0.18 } : { duration: 1.8, repeat: Infinity }}
             >
-              <span style={{ filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.85))" }}>{sprite}</span>
+              <span style={{ filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.85))", imageRendering: "pixelated" }}>{sprite}</span>
               {/* HP bar above monster */}
               {alive && (
                 <div className="absolute -top-3 left-0 right-0 h-1.5 bg-black/70 border border-slate-700 rounded-full overflow-hidden">
