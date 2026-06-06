@@ -12,8 +12,10 @@ import Crafting from "./Crafting";
 import SeasonPass from "./SeasonPass";
 import Shop from "./Shop";
 import EconomyShop from "./EconomyShop";
+import AdminPanel from "./AdminPanel";
 import WalletPanel from "../wallet/WalletPanel";
-import { Globe2, Save, Sword, Backpack, Hammer, Star, Sparkles, Calendar, Coins } from "lucide-react";
+import { adminCheck } from "../../lib/api";
+import { Globe2, Save, Sword, Backpack, Hammer, Star, Sparkles, Calendar, Coins, ShieldCheck } from "lucide-react";
 
 const TABS = [
   { id: "inventory", icon: Backpack, key: "inventory" },
@@ -33,6 +35,20 @@ export default function GamePanel() {
   const [loaded, setLoaded] = useState(false);
   const [tgMode, setTgMode] = useState(false);
   const [tgUser, setTgUser] = useState(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+
+  // Admin check (hidden tab only visible to ADMIN_TELEGRAM_IDS members)
+  useEffect(() => {
+    const w = game.wallet;
+    if (!w || !w.startsWith("tg:")) return undefined;
+    const tgId = parseInt(w.slice(3), 10);
+    if (!Number.isFinite(tgId)) return undefined;
+    let cancelled = false;
+    adminCheck(tgId)
+      .then((r) => { if (!cancelled) setIsAdmin(!!r.is_admin); })
+      .catch(() => { /* keep default false */ });
+    return () => { cancelled = true; };
+  }, [game.wallet]);
 
   // Telegram Mini App auto-auth on mount
   useEffect(() => {
@@ -45,39 +61,45 @@ export default function GamePanel() {
     const referredBy = refId ? parseInt(refId, 10) : null;
 
     if (tg && isTelegram()) {
-      setTgMode(true);
-      const user = getTelegramUser();
-      setTgUser(user);
+      let cancelled = false;
       (async () => {
+        const user = getTelegramUser();
         try {
           const r = await api.post("/telegram/auth", {
             init_data: getInitData(),
             referred_by: referredBy,
           });
+          if (cancelled) return;
           const data = r.data;
+          setTgMode(true);
+          setTgUser(user);
           game.hydrateFromServer({ ...data.player, wallet: data.wallet });
           if (data.referral_bonus_granted) {
-            // Welcome with bonus
             setTimeout(() => {
               import("sonner").then(({ toast }) => toast.success("🎁 Referral bonus: +200 gold & Rune Blade!"));
             }, 800);
           }
           setLoaded(true);
         } catch (e) {
+          if (cancelled) return;
+          setTgMode(true);
+          setTgUser(user);
           game.setWallet(`tg:guest`);
           game.initRun();
           setLoaded(true);
         }
       })();
-      return;
+      return () => { cancelled = true; };
     }
     // Dev / preview mode: ?guest=1 enables play without wallet
     if (params.get("guest") === "1") {
-      setTgMode(true);
-      setTgUser({ first_name: "Guest", username: "guest" });
-      game.setWallet("guest:local");
-      game.initRun();
-      setLoaded(true);
+      Promise.resolve().then(() => {
+        setTgMode(true);
+        setTgUser({ first_name: "Guest", username: "guest" });
+        game.setWallet("guest:local");
+        game.initRun();
+        setLoaded(true);
+      });
     }
   }, []);
 
@@ -173,6 +195,16 @@ export default function GamePanel() {
                 </button>
               );
             })}
+            {isAdmin && (
+              <button
+                key="admin"
+                data-testid="tab-admin"
+                onClick={() => setActiveTab("admin")}
+                className={`tab-pill flex items-center gap-1 border-rose-700/60 text-rose-300 ${activeTab === "admin" ? "active" : ""}`}
+              >
+                <ShieldCheck size={12} /> {t("adminPanel")}
+              </button>
+            )}
           </div>
 
           {activeTab === "inventory" && <InventoryPanel />}
@@ -181,6 +213,7 @@ export default function GamePanel() {
           {activeTab === "crafting" && <Crafting />}
           {activeTab === "talents" && <TalentTree />}
           {activeTab === "season" && <SeasonPass />}
+          {activeTab === "admin" && isAdmin && <AdminPanel />}
         </div>
       </div>
     </div>

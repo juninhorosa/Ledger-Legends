@@ -30,6 +30,26 @@ export const getPackCatalog = () =>
 export const buyPack = (wallet, pack_id) =>
   api.post(`/pack/buy`, { wallet, pack_id }).then((r) => r.data);
 
+// Withdrawals
+export const requestWithdraw = (wallet, amount_ton, to_address) =>
+  api.post(`/withdraw/request`, { wallet, amount_ton, to_address }).then((r) => r.data);
+export const getWithdrawHistory = (wallet, limit = 30) =>
+  api.get(`/withdrawals/${wallet}`, { params: { limit } }).then((r) => r.data);
+
+// Admin (Telegram-id gated)
+export const adminCheck = (admin_id) =>
+  api.get(`/admin/check/${admin_id}`).then((r) => r.data);
+export const adminListWithdrawals = (admin_id, status = "pending") =>
+  api.get(`/admin/withdrawals`, { params: { admin_id, status } }).then((r) => r.data);
+export const adminApproveWithdrawal = (wid, admin_id, tx_hash = "", note = "") =>
+  api.post(`/admin/withdrawals/${wid}/approve`, { admin_id, tx_hash, note }).then((r) => r.data);
+export const adminRejectWithdrawal = (wid, admin_id, note = "") =>
+  api.post(`/admin/withdrawals/${wid}/reject`, { admin_id, note }).then((r) => r.data);
+
+// Market
+export const marketSell = (wallet, inv_index, sell_price) =>
+  api.post(`/market/sell`, { wallet, inv_index, sell_price }).then((r) => r.data);
+
 // Aliases used by legacy components
 export const fetchPlayer = loadPlayer;
 export const recordPurchase = (wallet, payload) =>

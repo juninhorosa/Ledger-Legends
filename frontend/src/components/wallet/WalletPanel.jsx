@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from "react";
 import { useTonAddress, useTonConnectUI, useTonWallet } from "@tonconnect/ui-react";
-import { Wallet as WalletIcon, LogOut, Copy, ArrowDownToLine } from "lucide-react";
+import { Wallet as WalletIcon, LogOut, Copy, ArrowDownToLine, ArrowUpFromLine } from "lucide-react";
 import { useI18n } from "../../i18n/I18nContext";
 import { toast } from "sonner";
 import { useGame } from "../../store/gameStore";
 import { getBalance } from "../../lib/api";
 import DepositDialog from "./DepositDialog";
+import WithdrawDialog from "./WithdrawDialog";
 
 export default function WalletPanel() {
   const { t } = useI18n();
@@ -15,6 +16,7 @@ export default function WalletPanel() {
   const [balance, setBalance] = useState({ ton: 0, usdt: 0 });
   const [inGame, setInGame] = useState({ ton_balance: 0, vip_level: 0 });
   const [depositOpen, setDepositOpen] = useState(false);
+  const [withdrawOpen, setWithdrawOpen] = useState(false);
   const playerWallet = useGame((s) => s.wallet);
 
   // On-chain wallet TON balance (public TON Center read)
@@ -82,6 +84,14 @@ export default function WalletPanel() {
     setDepositOpen(true);
   };
 
+  const openWithdraw = () => {
+    if (!playerWallet) {
+      toast.error(t("connectWalletFirst"));
+      return;
+    }
+    setWithdrawOpen(true);
+  };
+
   if (!wallet) {
     return (
       <button
@@ -125,6 +135,14 @@ export default function WalletPanel() {
           <ArrowDownToLine size={12} /> {t("deposit")}
         </button>
         <button
+          data-testid="wallet-withdraw-button"
+          onClick={openWithdraw}
+          className="flex items-center gap-1 text-xs font-semibold px-2 py-1 rounded bg-rose-600/30 hover:bg-rose-600/50 border border-rose-500/40 text-rose-200"
+          title={t("withdrawTon")}
+        >
+          <ArrowUpFromLine size={12} /> {t("withdraw")}
+        </button>
+        <button
           data-testid="wallet-copy-address"
           onClick={copyAddress}
           className="flex items-center gap-1 text-xs text-slate-300 hover:text-amber-300 font-mono-num"
@@ -144,6 +162,11 @@ export default function WalletPanel() {
       <DepositDialog
         open={depositOpen}
         onClose={() => setDepositOpen(false)}
+        wallet={playerWallet || userFriendlyAddress}
+      />
+      <WithdrawDialog
+        open={withdrawOpen}
+        onClose={() => setWithdrawOpen(false)}
         wallet={playerWallet || userFriendlyAddress}
       />
     </>

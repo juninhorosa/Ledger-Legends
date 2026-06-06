@@ -12,15 +12,13 @@ export default function SkillsBar() {
   const { lang } = useI18n();
   const cooldowns = useGame((s) => s.skillCooldowns);
   const castSkill = useGame((s) => s.castSkill);
-  const [, force] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
 
   // Tick to update cooldown UI every 100ms
   useEffect(() => {
-    const id = setInterval(() => force((n) => n + 1), 100);
+    const id = setInterval(() => setNow(Date.now()), 100);
     return () => clearInterval(id);
   }, []);
-
-  const now = Date.now();
 
   return (
     <div data-testid="skills-bar" className="flex justify-center gap-3 mt-3">

@@ -30,6 +30,7 @@ import {
 export default function EconomyShop() {
   const { t, lang } = useI18n();
   const wallet = useGame((s) => s.wallet);
+  const setEconomyBuffs = useGame((s) => s.setEconomyBuffs);
   const [tab, setTab] = useState("packs");
   const [packs, setPacks] = useState([]);
   const [vipCatalog, setVipCatalog] = useState([]);
@@ -48,21 +49,26 @@ export default function EconomyShop() {
     try {
       const b = await getBalance(wallet);
       setBalance(b);
+      setEconomyBuffs(b);
     } catch (_) {
       /* silent */
     }
   };
 
   useEffect(() => {
+    let cancelled = false;
     (async () => {
       try {
         const [p, v] = await Promise.all([getPackCatalog(), getVipCatalog()]);
-        setPacks(p.items || []);
-        setVipCatalog(v.items || []);
+        if (!cancelled) {
+          setPacks(p.items || []);
+          setVipCatalog(v.items || []);
+        }
       } catch (_) {
         /* silent */
       }
     })();
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -71,7 +77,10 @@ export default function EconomyShop() {
       if (!wallet) return;
       try {
         const b = await getBalance(wallet);
-        if (!cancelled) setBalance(b);
+        if (!cancelled) {
+          setBalance(b);
+          setEconomyBuffs(b);
+        }
       } catch (_) {
         /* silent */
       }
@@ -82,7 +91,7 @@ export default function EconomyShop() {
       cancelled = true;
       clearInterval(id);
     };
-  }, [wallet]);
+  }, [wallet, setEconomyBuffs]);
 
   const onBuyPack = async (pack) => {
     if (!wallet) {

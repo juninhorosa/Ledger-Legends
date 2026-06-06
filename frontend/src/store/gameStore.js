@@ -19,6 +19,18 @@ const DEFAULT_STATE = {
   talentPoints: 0,
   seasonXp: 0,
   seasonClaimed: [],
+  // Economy buffs (synced from /api/balance)
+  vipLevel: 0,
+  vipBenefits: {
+    market_tax_pct: 20,
+    gold_drop_bonus_pct: 0,
+    xp_gain_bonus_pct: 0,
+    extra_inventory_slots: 0,
+    damage_bonus_pct: 0,
+    badge: null,
+  },
+  xpPackActive: false,
+  tonBalance: 0,
   // runtime
   monsters: [], // array of {id, sprite, name, maxHp, hp, dmg, gold, xp, isBoss}
   autoAttack: true,
@@ -79,12 +91,15 @@ function computeDerived(state) {
   const lootMult = 1 + (t.rune_master || 0) * 0.10;
 
   const baseDamage = Math.floor((5 + totalStr * 1.2 + (eqStats.dmg || 0)) * dmgMult);
-  const dps = +(baseDamage * aspd).toFixed(1);
+  // Apply VIP damage bonus
+  const vipDmgBonus = 1 + (state.vipBenefits?.damage_bonus_pct || 0) / 100;
+  const finalDamage = Math.floor(baseDamage * vipDmgBonus);
+  const dps = +(finalDamage * aspd).toFixed(1);
   const maxHp = Math.floor((50 + totalSta * 8 + state.level * 12) * hpMult);
   const defense = (eqStats.def || 0) + Math.floor(totalSta * 0.4);
 
   const bm = Math.floor(
-    baseDamage * 8 +
+    finalDamage * 8 +
     maxHp * 1.2 +
     defense * 4 +
     (totalStr + totalAgi + totalInt + totalSta) * 5 +
@@ -92,7 +107,25 @@ function computeDerived(state) {
     state.level * 50
   );
 
-  return { baseDamage, dps, maxHp, defense, totalStr, totalAgi, totalInt, totalSta, critChance, aspd, dodge, critDmg, goldMult, xpMult, lootMult, bm };
+  // Effective gold & XP multipliers including VIP + XP-pack buffs
+  const vipGold = 1 + (state.vipBenefits?.gold_drop_bonus_pct || 0) / 100;
+  const vipXp = 1 + (state.vipBenefits?.xp_gain_bonus_pct || 0) / 100;
+  const xpPackMult = state.xpPackActive ? 2 : 1;
+  const finalGoldMult = goldMult * vipGold;
+  const finalXpMult = xpMult * vipXp * xpPackMult;
+
+  return {
+    baseDamage: finalDamage,
+    dps,
+    maxHp,
+    defense,
+    totalStr, totalAgi, totalInt, totalSta,
+    critChance, aspd, dodge, critDmg,
+    goldMult: finalGoldMult,
+    xpMult: finalXpMult,
+    lootMult,
+    bm,
+  };
 }
 
 function applyDamageToMonster(monsters, id, dmg) {
@@ -139,6 +172,19 @@ export const useGame = create((set, get) => ({
 
   setWallet: (wallet) => set({ wallet }),
   setReferredBy: (refId) => set({ referredBy: refId }),
+  setEconomyBuffs: ({ vip_level, vip_benefits, xp_pack_active, ton_balance }) => set({
+    vipLevel: vip_level || 0,
+    vipBenefits: vip_benefits || {
+      market_tax_pct: 20,
+      gold_drop_bonus_pct: 0,
+      xp_gain_bonus_pct: 0,
+      extra_inventory_slots: 0,
+      damage_bonus_pct: 0,
+      badge: null,
+    },
+    xpPackActive: !!xp_pack_active,
+    tonBalance: ton_balance ?? 0,
+  }),
 
   hydrateFromServer: (data) => {
     const monsters = spawnWaveMonsters(data.wave || 1);

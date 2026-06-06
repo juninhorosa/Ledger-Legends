@@ -167,6 +167,59 @@ async def purchase_item(wallet: str, body: PurchaseRequest):
     )
     return {"status": "confirmed", "item_id": body.item_id}
 
+
+# ---------- Market: sell inventory item with VIP-based tax ----------
+class MarketSellRequest(BaseModel):
+    wallet: str
+    inv_index: int = Field(ge=0)
+    sell_price: int = Field(gt=0)  # gross sale price (gold) before tax
+
+
+@api_router.post("/market/sell")
+async def market_sell(body: MarketSellRequest):
+    player = await db.players.find_one({"wallet": body.wallet}, {"_id": 0})
+    if not player:
+        raise HTTPException(status_code=404, detail="Player not found")
+    inv = list(player.get("inventory") or [])
+    if body.inv_index >= len(inv):
+        raise HTTPException(status_code=400, detail="Invalid inventory index")
+    item_id = inv.pop(body.inv_index)
+    vip_lv = int(player.get("vip_level") or 0)
+    tax_pct = 10 if vip_lv >= 1 else 20
+    if vip_lv >= 20:
+        tax_pct = 8
+    if vip_lv >= 30:
+        tax_pct = 5
+    net_gold = int(body.sell_price * (100 - tax_pct) / 100)
+    tax_gold = body.sell_price - net_gold
+    await db.players.update_one(
+        {"wallet": body.wallet},
+        {
+            "$set": {"inventory": inv, "updated_at": datetime.now(timezone.utc).isoformat()},
+            "$inc": {"gold": net_gold},
+        },
+    )
+    await db.market_sales.insert_one({
+        "id": str(uuid.uuid4()),
+        "wallet": body.wallet,
+        "item_id": item_id,
+        "sell_price": body.sell_price,
+        "tax_pct": tax_pct,
+        "tax_gold": tax_gold,
+        "net_gold": net_gold,
+        "vip_level": vip_lv,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    return {
+        "status": "ok",
+        "item_id": item_id,
+        "gross_gold": body.sell_price,
+        "tax_pct": tax_pct,
+        "tax_gold": tax_gold,
+        "net_gold": net_gold,
+        "vip_level": vip_lv,
+    }
+
 @api_router.get("/leaderboard")
 async def leaderboard():
     cursor = db.players.find({}, {"_id": 0, "wallet": 1, "name": 1, "highest_wave": 1, "battle_meter": 1, "level": 1})
@@ -785,6 +838,161 @@ async def vip_buy(body: VipBuyRequest):
         "vip_level": int(updated.get("vip_level", 0)),
         "benefits": vip_benefits(body.target_level),
     }
+
+
+# =====================================================================
+# ================ Phase 4 — Withdrawals + Admin =====================
+# =====================================================================
+
+class WithdrawRequest(BaseModel):
+    wallet: str
+    amount_ton: float = Field(gt=0, le=10000)
+    to_address: str = Field(min_length=10, max_length=128)
+
+
+class AdminActionRequest(BaseModel):
+    admin_id: int
+    note: Optional[str] = None
+    tx_hash: Optional[str] = None  # provided on approval after admin pays out manually
+
+
+def _is_admin(admin_id: int) -> bool:
+    return admin_id in ADMIN_TELEGRAM_IDS
+
+
+@api_router.post("/withdraw/request")
+async def withdraw_request(body: WithdrawRequest):
+    player = await db.players.find_one({"wallet": body.wallet}, {"_id": 0})
+    if not player:
+        raise HTTPException(status_code=404, detail="Player not found")
+    amt = float(body.amount_ton)
+    if float(player.get("ton_balance", 0.0)) < amt - 1e-9:
+        raise HTTPException(status_code=400, detail="Insufficient TON balance")
+    # Atomic debit (hold the funds until admin approves/rejects)
+    res = await db.players.update_one(
+        {"wallet": body.wallet, "ton_balance": {"$gte": amt - 1e-9}},
+        {"$inc": {"ton_balance": -amt}, "$set": {"updated_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    if res.modified_count == 0:
+        raise HTTPException(status_code=409, detail="Concurrent update; please retry")
+
+    withdrawal = {
+        "id": str(uuid.uuid4()),
+        "wallet": body.wallet,
+        "amount_ton": amt,
+        "to_address": body.to_address,
+        "status": "pending",  # pending | approved | rejected
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "decided_at": None,
+        "admin_id": None,
+        "admin_note": None,
+        "tx_hash": None,
+    }
+    await db.withdrawals.insert_one(withdrawal)
+
+    # Notify all admins (best-effort)
+    for admin_tg in ADMIN_TELEGRAM_IDS:
+        try:
+            await _tg_send(
+                admin_tg,
+                f"<b>📤 Withdrawal pending</b>\nWallet: <code>{body.wallet}</code>\nAmount: <b>{amt:.4f} TON</b>\nTo: <code>{body.to_address}</code>\nID: <code>{withdrawal['id']}</code>",
+            )
+        except Exception:
+            pass
+
+    return {"status": "pending", "withdrawal_id": withdrawal["id"], "amount_ton": amt}
+
+
+@api_router.get("/withdrawals/{wallet}")
+async def withdrawals_history(wallet: str, limit: int = 30):
+    cursor = db.withdrawals.find({"wallet": wallet}, {"_id": 0}).sort("created_at", -1).limit(limit)
+    return await cursor.to_list(limit)
+
+
+# ---------- Admin ----------
+@api_router.get("/admin/check/{admin_id}")
+async def admin_check(admin_id: int):
+    return {"is_admin": _is_admin(admin_id)}
+
+
+@api_router.get("/admin/withdrawals")
+async def admin_list_withdrawals(admin_id: int, status: str = "pending", limit: int = 100):
+    if not _is_admin(admin_id):
+        raise HTTPException(status_code=403, detail="Not an admin")
+    q: Dict[str, Any] = {}
+    if status and status != "all":
+        q["status"] = status
+    cursor = db.withdrawals.find(q, {"_id": 0}).sort("created_at", -1).limit(limit)
+    return await cursor.to_list(limit)
+
+
+@api_router.post("/admin/withdrawals/{wid}/approve")
+async def admin_approve_withdrawal(wid: str, body: AdminActionRequest):
+    if not _is_admin(body.admin_id):
+        raise HTTPException(status_code=403, detail="Not an admin")
+    w = await db.withdrawals.find_one({"id": wid}, {"_id": 0})
+    if not w:
+        raise HTTPException(status_code=404, detail="Withdrawal not found")
+    if w["status"] != "pending":
+        raise HTTPException(status_code=400, detail=f"Withdrawal is already {w['status']}")
+    await db.withdrawals.update_one(
+        {"id": wid, "status": "pending"},
+        {"$set": {
+            "status": "approved",
+            "decided_at": datetime.now(timezone.utc).isoformat(),
+            "admin_id": body.admin_id,
+            "admin_note": body.note,
+            "tx_hash": body.tx_hash,
+        }},
+    )
+    if w["wallet"].startswith("tg:"):
+        try:
+            tg_id = int(w["wallet"].split(":", 1)[1])
+            await _tg_send(
+                tg_id,
+                f"<b>✅ Withdrawal approved</b>\n+{w['amount_ton']:.4f} TON to <code>{w['to_address']}</code>"
+                + (f"\nTx: <code>{body.tx_hash}</code>" if body.tx_hash else ""),
+            )
+        except Exception:
+            pass
+    return {"status": "approved", "id": wid}
+
+
+@api_router.post("/admin/withdrawals/{wid}/reject")
+async def admin_reject_withdrawal(wid: str, body: AdminActionRequest):
+    if not _is_admin(body.admin_id):
+        raise HTTPException(status_code=403, detail="Not an admin")
+    w = await db.withdrawals.find_one({"id": wid}, {"_id": 0})
+    if not w:
+        raise HTTPException(status_code=404, detail="Withdrawal not found")
+    if w["status"] != "pending":
+        raise HTTPException(status_code=400, detail=f"Withdrawal is already {w['status']}")
+    # Refund balance
+    await db.players.update_one(
+        {"wallet": w["wallet"]},
+        {"$inc": {"ton_balance": float(w["amount_ton"])},
+         "$set": {"updated_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    await db.withdrawals.update_one(
+        {"id": wid, "status": "pending"},
+        {"$set": {
+            "status": "rejected",
+            "decided_at": datetime.now(timezone.utc).isoformat(),
+            "admin_id": body.admin_id,
+            "admin_note": body.note,
+        }},
+    )
+    if w["wallet"].startswith("tg:"):
+        try:
+            tg_id = int(w["wallet"].split(":", 1)[1])
+            await _tg_send(
+                tg_id,
+                f"<b>❌ Withdrawal rejected</b>\nAmount refunded: {w['amount_ton']:.4f} TON"
+                + (f"\nReason: {body.note}" if body.note else ""),
+            )
+        except Exception:
+            pass
+    return {"status": "rejected", "id": wid, "refunded_ton": float(w["amount_ton"])}
 
 
 # ---------- Background TON deposit poller ----------

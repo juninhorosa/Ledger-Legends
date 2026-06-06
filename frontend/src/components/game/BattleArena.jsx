@@ -1,12 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { motion, useMotionValue, useSpring } from "framer-motion";
 import { useGame } from "../../store/gameStore";
-import { MONSTER_SPRITES } from "../../game/items";
 import { useI18n } from "../../i18n/I18nContext";
 import { hapticImpact } from "../../lib/telegram";
 import { Skull } from "lucide-react";
 import SkillEffect from "./SkillEffect";
 import ForestMap from "./ForestMap";
+import { PixelHero, MonsterSprite, useWalkFrame } from "./PixelSprites";
 
 const HERO_AVATAR = "https://images.unsplash.com/photo-1773216344064-e1231ff27d09?w=400&q=70";
 const HERO_RADIUS = 36;
@@ -43,7 +43,19 @@ export default function BattleArena() {
   const lastAttackRef = useRef(0);
   const rafRef = useRef(null);
   const lastTickRef = useRef(0);
+  const lastDisplayUpdateRef = useRef(0);
   const [hitFlash, setHitFlash] = useState({}); // id -> bool
+  const [heroFacing, setHeroFacing] = useState("right");
+  const [heroMoving, setHeroMoving] = useState(false);
+  const [displayHero, setDisplayHero] = useState({ x: 120, y: 200 });
+  const [globalFrame, setGlobalFrame] = useState(0);
+  const heroWalkFrame = useWalkFrame(heroMoving, 200);
+
+  // Global walk frame for monsters (every 220ms)
+  useEffect(() => {
+    const id = setInterval(() => setGlobalFrame((f) => (f + 1) % 2), 220);
+    return () => clearInterval(id);
+  }, []);
 
   // Track arena size
   useEffect(() => {
@@ -146,6 +158,24 @@ export default function BattleArena() {
       const hx = heroSpringX.get();
       const hy = heroSpringY.get();
       const s = useGame.getState();
+
+      // Throttle display state updates (~10 fps for state-driven calculations)
+      if (now - lastDisplayUpdateRef.current > 100) {
+        lastDisplayUpdateRef.current = now;
+        setDisplayHero((prev) => (Math.abs(prev.x - hx) < 0.5 && Math.abs(prev.y - hy) < 0.5 ? prev : { x: hx, y: hy }));
+      }
+
+      // Update hero facing & moving state
+      const moving = !!(dx || dy);
+      const prevX = hx;
+      const newTargetX = targetRef.current.x;
+      setHeroMoving((m) => (m === moving ? m : moving));
+      if (Math.abs(newTargetX - prevX) > 0.5) {
+        setHeroFacing((f) => {
+          const nf = newTargetX > prevX ? "right" : "left";
+          return f === nf ? f : nf;
+        });
+      }
 
       // Move each alive monster toward hero; find closest in range
       let closest = null;
@@ -270,9 +300,9 @@ export default function BattleArena() {
         }}
       >
         <motion.div
-          className="w-full h-full"
+          className="w-full h-full flex items-center justify-center"
           animate={
-            heroState === "attack" ? { rotate: -12, scale: 1.08 }
+            heroState === "attack" ? { rotate: -8, scale: 1.08 }
             : heroState === "cast" ? { scale: 1.15 }
             : heroState === "victory" ? { scale: 1.15, y: -6 }
             : { rotate: 0, scale: 1, y: [0, -2, 0] }
@@ -281,20 +311,22 @@ export default function BattleArena() {
             ? { duration: 1.8, repeat: Infinity }
             : { type: "spring", stiffness: 320, damping: 16 }}
         >
-          <img
-            src={HERO_AVATAR}
-            alt="hero"
-            draggable={false}
-            className="w-full h-full object-cover rounded-full border-4 border-amber-700"
+          <div
             style={{
-              imageRendering: "pixelated",
-              boxShadow: heroState === "cast"
-                ? "0 0 30px rgba(6,182,212,0.95), inset 0 0 16px rgba(6,182,212,0.4)"
+              filter: heroState === "cast"
+                ? "drop-shadow(0 0 12px rgba(6,182,212,0.95))"
                 : heroState === "victory"
-                ? "0 0 32px rgba(245,158,11,0.95)"
-                : "0 0 16px rgba(217,119,6,0.5)",
+                ? "drop-shadow(0 0 14px rgba(245,158,11,0.95))"
+                : "drop-shadow(0 0 8px rgba(0,0,0,0.6))",
             }}
-          />
+          >
+            <PixelHero
+              size={HERO_RADIUS * 2}
+              facing={heroFacing}
+              frame={heroMoving ? heroWalkFrame : 0}
+              state={heroState}
+            />
+          </div>
         </motion.div>
       </motion.div>
 
@@ -302,10 +334,14 @@ export default function BattleArena() {
       {monsters.map((m) => {
         const p = monsterPositions[m.id];
         if (!p) return null;
-        const sprite = MONSTER_SPRITES[m.sprite] || "👹";
         const r = m.isBoss ? BOSS_RADIUS : MONSTER_RADIUS;
         const alive = m.hp > 0;
         const isHit = hitFlash[m.id];
+        // Monster faces the hero
+        const facing = displayHero.x > p.x ? "right" : "left";
+        // Offset walk frame deterministically per-monster (no Date.now in render)
+        const idHash = (m.id && m.id.charCodeAt ? m.id.charCodeAt(m.id.length - 1) : 0);
+        const walkFrame = (globalFrame + idHash) % 2;
         return (
           <motion.div
             key={m.id}
@@ -322,24 +358,27 @@ export default function BattleArena() {
             style={{ translateX: -r, translateY: -r, width: r * 2, height: r * 2 }}
           >
             <motion.div
-              className={`relative w-full h-full rounded-full border-4 ${m.isBoss ? "border-red-600" : m.isMinion ? "border-slate-500" : "border-amber-700"} flex items-center justify-center bg-gradient-to-b from-slate-800 to-black`}
+              className="relative w-full h-full flex items-center justify-center"
               style={{
-                boxShadow: m.isBoss
-                  ? "0 0 36px rgba(220,38,38,0.7)"
-                  : m.isMinion
-                  ? "0 0 14px rgba(148,163,184,0.4)"
-                  : "0 0 22px rgba(217,119,6,0.55)",
-                filter: isHit ? "brightness(2.5)" : "brightness(1)",
-                fontSize: m.isBoss ? 56 : 40,
-                lineHeight: 1,
+                filter: isHit
+                  ? "brightness(2.4) drop-shadow(0 0 6px #fff)"
+                  : m.isBoss
+                  ? "drop-shadow(0 0 12px rgba(220,38,38,0.85))"
+                  : "drop-shadow(0 2px 4px rgba(0,0,0,0.65))",
               }}
-              animate={isHit ? { x: [0, -5, 5, 0], scale: [1, 1.12, 1] } : { y: [0, -3, 0] }}
+              animate={isHit ? { x: [0, -5, 5, 0], scale: [1, 1.12, 1] } : { y: [0, -2, 0] }}
               transition={isHit ? { duration: 0.18 } : { duration: 1.8, repeat: Infinity }}
             >
-              <span style={{ filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.85))", imageRendering: "pixelated" }}>{sprite}</span>
+              <MonsterSprite
+                kind={m.sprite}
+                size={r * 2}
+                facing={facing}
+                frame={alive ? walkFrame : 0}
+                isBoss={!!m.isBoss}
+              />
               {/* HP bar above monster */}
               {alive && (
-                <div className="absolute -top-3 left-0 right-0 h-1.5 bg-black/70 border border-slate-700 rounded-full overflow-hidden">
+                <div className="absolute -top-3 left-2 right-2 h-1.5 bg-black/70 border border-slate-700 rounded-full overflow-hidden">
                   <div
                     className={`h-full ${m.isBoss ? "bg-red-500" : m.isMinion ? "bg-slate-300" : "bg-amber-400"}`}
                     style={{ width: `${(m.hp / m.maxHp) * 100}%` }}
@@ -368,13 +407,13 @@ export default function BattleArena() {
       )}
 
       {/* Damage numbers (positioned near hero) */}
-      {damageNumbers.map((dn) => (
+      {damageNumbers.map((dn, idx) => (
         <span
           key={dn.id}
           className={`damage-number ${dn.crit ? "crit" : ""}`}
           style={{
-            left: heroSpringX.get() + (Math.random() - 0.5) * 80,
-            top: heroSpringY.get() - 50,
+            left: displayHero.x + ((idx % 5) - 2) * 18,
+            top: displayHero.y - 50,
           }}
         >
           {dn.crit ? "CRIT! " : ""}{dn.value}
