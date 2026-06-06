@@ -211,9 +211,17 @@ class ClassPickRequest(BaseModel):
     class_id: str
 
 
+class ClassSwapRequest(BaseModel):
+    wallet: str
+    new_class_id: str
+
+
+CLASS_SWAP_PRICE_TON = 1.0
+
+
 @api_router.get("/classes")
 async def list_classes():
-    return {"items": list(CLASSES.values())}
+    return {"items": list(CLASSES.values()), "swap_price_ton": CLASS_SWAP_PRICE_TON}
 
 
 @api_router.post("/player/{wallet}/class")
@@ -237,6 +245,176 @@ async def set_player_class(wallet: str, body: ClassPickRequest):
         }},
     )
     return {"status": "ok", "class_id": cls["id"], "stats": base, "bonuses": cls["bonuses"]}
+
+
+@api_router.post("/player/class/swap")
+async def swap_player_class(body: ClassSwapRequest):
+    cls = CLASSES.get(body.new_class_id)
+    if not cls:
+        raise HTTPException(status_code=400, detail="Unknown class")
+    player = await db.players.find_one({"wallet": body.wallet}, {"_id": 0})
+    if not player:
+        raise HTTPException(status_code=404, detail="Player not found")
+    if not player.get("class_id"):
+        raise HTTPException(status_code=400, detail="No class chosen yet — use /class first")
+    if player["class_id"] == body.new_class_id:
+        raise HTTPException(status_code=400, detail="Already this class")
+    if float(player.get("ton_balance", 0.0)) < CLASS_SWAP_PRICE_TON - 1e-9:
+        raise HTTPException(status_code=400, detail="Insufficient TON balance (need 1 TON)")
+    # Atomic debit + class change
+    res = await db.players.update_one(
+        {"wallet": body.wallet, "ton_balance": {"$gte": CLASS_SWAP_PRICE_TON - 1e-9}, "class_id": player["class_id"]},
+        {
+            "$inc": {"ton_balance": -CLASS_SWAP_PRICE_TON},
+            "$set": {
+                "class_id": cls["id"],
+                "stats": cls["base_stats"],
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+        },
+    )
+    if res.modified_count == 0:
+        raise HTTPException(status_code=409, detail="Concurrent update; please retry")
+    await db.class_swaps.insert_one({
+        "id": str(uuid.uuid4()),
+        "wallet": body.wallet,
+        "from_class": player["class_id"],
+        "to_class": body.new_class_id,
+        "price_ton": CLASS_SWAP_PRICE_TON,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    return {"status": "ok", "class_id": body.new_class_id, "price_ton": CLASS_SWAP_PRICE_TON, "stats": cls["base_stats"]}
+
+
+# ---------- Global Market (TON-priced peer listings) ----------
+class MarketListRequest(BaseModel):
+    wallet: str
+    inv_index: int = Field(ge=0)
+    price_ton: float = Field(gt=0, le=10000)
+
+
+class MarketBuyRequest(BaseModel):
+    wallet: str
+    listing_id: str
+
+
+@api_router.post("/market/list")
+async def market_list(body: MarketListRequest):
+    player = await db.players.find_one({"wallet": body.wallet}, {"_id": 0})
+    if not player:
+        raise HTTPException(status_code=404, detail="Player not found")
+    inv = list(player.get("inventory") or [])
+    if body.inv_index >= len(inv):
+        raise HTTPException(status_code=400, detail="Invalid inventory index")
+    item_id = inv[body.inv_index]
+    # Atomically remove the item to escrow it on the listing
+    new_inv = inv[:body.inv_index] + inv[body.inv_index + 1:]
+    await db.players.update_one(
+        {"wallet": body.wallet},
+        {"$set": {"inventory": new_inv, "updated_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    listing = {
+        "id": str(uuid.uuid4()),
+        "seller": body.wallet,
+        "item_id": item_id,
+        "price_ton": float(body.price_ton),
+        "status": "active",  # active | sold | cancelled
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "sold_at": None,
+        "buyer": None,
+    }
+    await db.market_listings.insert_one(listing)
+    return {"status": "ok", "listing_id": listing["id"], "item_id": item_id, "price_ton": float(body.price_ton)}
+
+
+@api_router.get("/market/listings")
+async def market_listings(limit: int = 50, item_id: Optional[str] = None):
+    q: Dict[str, Any] = {"status": "active"}
+    if item_id:
+        q["item_id"] = item_id
+    cursor = db.market_listings.find(q, {"_id": 0}).sort("created_at", -1).limit(limit)
+    return await cursor.to_list(limit)
+
+
+@api_router.post("/market/buy")
+async def market_buy(body: MarketBuyRequest):
+    listing = await db.market_listings.find_one({"id": body.listing_id}, {"_id": 0})
+    if not listing:
+        raise HTTPException(status_code=404, detail="Listing not found")
+    if listing["status"] != "active":
+        raise HTTPException(status_code=400, detail=f"Listing is {listing['status']}")
+    if listing["seller"] == body.wallet:
+        raise HTTPException(status_code=400, detail="Cannot buy your own listing")
+    price = float(listing["price_ton"])
+    buyer = await db.players.find_one({"wallet": body.wallet}, {"_id": 0})
+    if not buyer:
+        raise HTTPException(status_code=404, detail="Buyer not found")
+    if float(buyer.get("ton_balance", 0.0)) < price - 1e-9:
+        raise HTTPException(status_code=400, detail="Insufficient TON balance")
+    # Tax based on SELLER's VIP level
+    seller = await db.players.find_one({"wallet": listing["seller"]}, {"_id": 0})
+    seller_vip = int((seller or {}).get("vip_level", 0))
+    tax_pct = int(vip_benefits(seller_vip).get("market_tax_pct", 20))
+    seller_net = round(price * (100 - tax_pct) / 100, 6)
+    # Atomic flip listing → sold
+    res = await db.market_listings.update_one(
+        {"id": body.listing_id, "status": "active"},
+        {"$set": {
+            "status": "sold",
+            "sold_at": datetime.now(timezone.utc).isoformat(),
+            "buyer": body.wallet,
+            "tax_pct": tax_pct,
+            "seller_net_ton": seller_net,
+        }},
+    )
+    if res.modified_count == 0:
+        raise HTTPException(status_code=409, detail="Listing was just sold")
+    # Atomic buyer debit (conditional)
+    bres = await db.players.update_one(
+        {"wallet": body.wallet, "ton_balance": {"$gte": price - 1e-9}},
+        {"$inc": {"ton_balance": -price},
+         "$push": {"inventory": listing["item_id"]},
+         "$set": {"updated_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    if bres.modified_count == 0:
+        # Rollback listing back to active
+        await db.market_listings.update_one(
+            {"id": body.listing_id},
+            {"$set": {"status": "active", "sold_at": None, "buyer": None}},
+        )
+        raise HTTPException(status_code=409, detail="Buyer balance check failed; retry")
+    # Credit seller net
+    await db.players.update_one(
+        {"wallet": listing["seller"]},
+        {"$inc": {"ton_balance": seller_net},
+         "$set": {"updated_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    return {"status": "ok", "item_id": listing["item_id"], "price_ton": price, "tax_pct": tax_pct, "seller_net_ton": seller_net}
+
+
+@api_router.post("/market/cancel/{listing_id}")
+async def market_cancel(listing_id: str, body: dict):
+    wallet = body.get("wallet")
+    if not wallet:
+        raise HTTPException(status_code=400, detail="wallet required")
+    listing = await db.market_listings.find_one({"id": listing_id}, {"_id": 0})
+    if not listing:
+        raise HTTPException(status_code=404, detail="Listing not found")
+    if listing["seller"] != wallet:
+        raise HTTPException(status_code=403, detail="Not your listing")
+    if listing["status"] != "active":
+        raise HTTPException(status_code=400, detail=f"Listing is {listing['status']}")
+    await db.market_listings.update_one(
+        {"id": listing_id, "status": "active"},
+        {"$set": {"status": "cancelled"}},
+    )
+    # Return the item to seller inventory
+    await db.players.update_one(
+        {"wallet": wallet},
+        {"$push": {"inventory": listing["item_id"]},
+         "$set": {"updated_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    return {"status": "ok"}
 
 
 # ---------- Market: sell inventory item with VIP-based tax ----------
